@@ -1,0 +1,11 @@
+out/
+build/
+DirectX-Graphics-Samples-master/*
+imgui/
+event_conflicts.log
+crash_report.log
+*.dmp
+analysis_report_*.json
+artifacts/
+build_dx12/
+bin/
