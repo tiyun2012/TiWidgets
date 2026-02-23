@@ -331,6 +331,9 @@ WindowFrame* WindowManager::createFloatingWindow(DockWidget* widget, const DFRec
 void WindowManager::destroyWindow(WindowFrame* window)
 {
     if (window && window->content()) {
+        if (focusedWidget_ && window->content()->content() == focusedWidget_) {
+            clearFocus();
+        }
         window->content()->floating_ = false;
         window->content()->hostWindow_ = nullptr;
         window->content()->hostType_ = DockWidget::HostType::DockedLayout;
@@ -344,6 +347,14 @@ void WindowManager::destroyWindow(WindowFrame* window)
 
 void WindowManager::destroyAllWindows()
 {
+    if (focusedWidget_) {
+        for (const auto& frame : windows_) {
+            if (frame && frame->content() && frame->content()->content() == focusedWidget_) {
+                clearFocus();
+                break;
+            }
+        }
+    }
     windows_.clear();
 }
 
@@ -434,6 +445,21 @@ void WindowManager::setClientOriginScreen(const DFPoint& originScreen)
         if (w) {
             w->syncLocalFromClientOrigin(clientOriginScreen_);
         }
+    }
+}
+
+void WindowManager::setFocus(Widget* widget)
+{
+    Widget* next = (widget && widget->acceptsFocus()) ? widget : nullptr;
+    if (focusedWidget_ == next) {
+        return;
+    }
+    if (focusedWidget_) {
+        focusedWidget_->setFocused(false);
+    }
+    focusedWidget_ = next;
+    if (focusedWidget_) {
+        focusedWidget_->setFocused(true);
     }
 }
 

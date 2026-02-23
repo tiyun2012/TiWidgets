@@ -72,6 +72,9 @@ public:
     const DFRect& workArea() const { return workArea_; }
     void setClientOriginScreen(const DFPoint& originScreen);
     const DFPoint& clientOriginScreen() const { return clientOriginScreen_; }
+    void setFocus(Widget* widget);
+    void clearFocus() { setFocus(nullptr); }
+    Widget* focusedWidget() const { return focusedWidget_; }
 
     void updateAllWindows();
     void renderAllWindows(Canvas& canvas);
@@ -81,6 +84,7 @@ private:
     std::vector<std::unique_ptr<WindowFrame>> windows_;
     DFRect workArea_{0.0f, 0.0f, 1280.0f, 720.0f};
     DFPoint clientOriginScreen_{0.0f, 0.0f};
+    Widget* focusedWidget_ = nullptr;
 };
 
 } // namespace df

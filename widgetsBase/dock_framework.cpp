@@ -650,6 +650,11 @@ void DockWidget::handleEvent(Event& event)
         return;
     }
 
+    if (event.type == Event::Type::MouseDown ||
+        event.type == Event::Type::MouseDoubleClick) {
+        WindowManager::instance().setFocus(content_.get());
+    }
+
     Event local = event;
     const DFRect client = clientAreaRect(bounds_);
     local.x -= client.x;
@@ -852,6 +857,10 @@ void DockManager::closeWidget(DockWidget* widget)
 {
     if (!widget) {
         return;
+    }
+    if (widget->content() &&
+        WindowManager::instance().focusedWidget() == widget->content()) {
+        WindowManager::instance().clearFocus();
     }
     if (widget->isFloating()) {
         if (auto* frame = WindowManager::instance().findWindowByContent(widget)) {

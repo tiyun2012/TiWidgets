@@ -2,6 +2,7 @@
 
 #include "dock_framework.h"
 #include "dock_theme.h"
+#include "window_manager.h"
 #include <algorithm>
 
 namespace df {
@@ -57,6 +58,11 @@ public:
 
         if (!content()) {
             return;
+        }
+
+        if (event.type == Event::Type::MouseDown ||
+            event.type == Event::Type::MouseDoubleClick) {
+            WindowManager::instance().setFocus(content());
         }
 
         const DFRect contentArea{b.x, b.y + topOffset, b.width, std::max(0.0f, b.height - topOffset)};

@@ -541,8 +541,13 @@ private:
     {
         switch (type) {
         case Event::Type::MouseDown: return "MouseDown";
+        case Event::Type::MouseDoubleClick: return "MouseDoubleClick";
+        case Event::Type::MouseDrag: return "MouseDrag";
         case Event::Type::MouseUp: return "MouseUp";
         case Event::Type::MouseMove: return "MouseMove";
+        case Event::Type::KeyDown: return "KeyDown";
+        case Event::Type::KeyUp: return "KeyUp";
+        case Event::Type::TextInput: return "TextInput";
         default: return "Other";
         }
     }
@@ -611,6 +616,7 @@ private:
     void handleResize(UINT width, UINT height);
     LRESULT handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT handleKeyMessage(WPARAM wParam, LPARAM lParam);
+    LRESULT handleCharMessage(WPARAM wParam, LPARAM lParam);
     void processEvent(Event& event);
     void dispatchMouseEvent(Event& event);
     bool handleShortcutKey(int key, bool ctrlDown, bool shiftDown);
@@ -761,7 +767,7 @@ DX12Demo::~DX12Demo()
 void DX12Demo::initWindow(HINSTANCE hInstance)
 {
     WNDCLASSEX wc{ sizeof(WNDCLASSEX) };
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -770,7 +776,7 @@ void DX12Demo::initWindow(HINSTANCE hInstance)
 
     if (nativeFloatHostsEnabled_) {
         WNDCLASSEX fwc{ sizeof(WNDCLASSEX) };
-        fwc.style = CS_HREDRAW | CS_VREDRAW;
+        fwc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
         fwc.lpfnWndProc = FloatingHostWndProc;
         fwc.hInstance = hInstance;
         fwc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -1584,14 +1590,50 @@ LRESULT DX12Demo::handleKeyMessage(WPARAM wParam, LPARAM lParam)
     (void)lParam;
     Event event(Event::Type::KeyDown);
     event.key = static_cast<int>(wParam);
+    event.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    event.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    event.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
 
-    const bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-
-    event.handled = handleShortcutKey(event.key, ctrlDown, shiftDown);
+    event.handled = handleShortcutKey(event.key, event.ctrl, event.shift);
+    if (!event.handled) {
+        processEvent(event);
+    }
     statusDirty_ = true;
     updateStatusCaption();
     return event.handled ? 0 : DefWindowProc(hwnd_, WM_KEYDOWN, wParam, lParam);
+}
+
+LRESULT DX12Demo::handleCharMessage(WPARAM wParam, LPARAM lParam)
+{
+    (void)lParam;
+    Event event(Event::Type::TextInput);
+    const wchar_t ch = static_cast<wchar_t>(wParam);
+
+    char utf8Buffer[8]{};
+    const int written = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        &ch,
+        1,
+        utf8Buffer,
+        static_cast<int>(sizeof(utf8Buffer)),
+        nullptr,
+        nullptr);
+    if (written > 0) {
+        event.textUtf8.assign(utf8Buffer, utf8Buffer + written);
+    }
+
+    event.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    event.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    event.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+
+    if (!event.textUtf8.empty()) {
+        processEvent(event);
+    }
+
+    statusDirty_ = true;
+    updateStatusCaption();
+    return event.handled ? 0 : DefWindowProc(hwnd_, WM_CHAR, wParam, lParam);
 }
 
 df::DockWidget* DX12Demo::pickDockTarget(const DFPoint& mousePos, df::DockWidget* movingWidget) const
@@ -2475,9 +2517,12 @@ LRESULT CALLBACK DX12Demo::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         demo->syncClientOriginScreen();
         return 0;
     case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
     case WM_LBUTTONUP:
     case WM_MOUSEMOVE:
         return demo->handleMouseMessage(msg, wParam, lParam);
+    case WM_CHAR:
+        return demo->handleCharMessage(wParam, lParam);
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         return demo->handleKeyMessage(wParam, lParam);
@@ -2712,6 +2757,12 @@ LRESULT DX12Demo::handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         captureActive_ = true;
         leftMouseDown_ = true;
         break;
+    case WM_LBUTTONDBLCLK:
+        e.type = Event::Type::MouseDoubleClick;
+        SetCapture(hwnd_);
+        captureActive_ = true;
+        leftMouseDown_ = true;
+        break;
     case WM_LBUTTONUP:
         e.type = Event::Type::MouseUp;
         if (captureActive_) {
@@ -2733,6 +2784,13 @@ LRESULT DX12Demo::handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
 void DX12Demo::processEvent(Event& event)
 {
+    const bool pointerEvent =
+        event.type == Event::Type::MouseDown ||
+        event.type == Event::Type::MouseUp ||
+        event.type == Event::Type::MouseMove ||
+        event.type == Event::Type::MouseDoubleClick ||
+        event.type == Event::Type::MouseDrag;
+
     if (resizing_ || viewport_.Width <= 0.0f || viewport_.Height <= 0.0f) {
         event.handled = true;
         lastDispatchHandler_ = "resize_blocked";
@@ -2740,14 +2798,16 @@ void DX12Demo::processEvent(Event& event)
         return;
     }
 
-    event.x = SafeClamp(event.x, 0.0f, viewport_.Width);
-    event.y = SafeClamp(event.y, 0.0f, viewport_.Height);
-    lastMousePos_ = {event.x, event.y};
-    updateHoverState(lastMousePos_);
-    if (event.type == Event::Type::MouseDown) {
-        leftMouseDown_ = true;
-    } else if (event.type == Event::Type::MouseUp) {
-        leftMouseDown_ = false;
+    if (pointerEvent) {
+        event.x = SafeClamp(event.x, 0.0f, viewport_.Width);
+        event.y = SafeClamp(event.y, 0.0f, viewport_.Height);
+        lastMousePos_ = {event.x, event.y};
+        updateHoverState(lastMousePos_);
+        if (event.type == Event::Type::MouseDown || event.type == Event::Type::MouseDoubleClick) {
+            leftMouseDown_ = true;
+        } else if (event.type == Event::Type::MouseUp) {
+            leftMouseDown_ = false;
+        }
     }
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -2758,7 +2818,15 @@ void DX12Demo::processEvent(Event& event)
     eventConsole_.logIncoming(event, anyDrag);
 
     lastDispatchHandler_.clear();
-    dispatchMouseEvent(event);
+    if (pointerEvent) {
+        dispatchMouseEvent(event);
+    } else if (Widget* focused = df::WindowManager::instance().focusedWidget()) {
+        focused->handleEvent(event);
+        if (event.handled) {
+            lastDispatchHandler_ = "focused_widget";
+            eventConsole_.logHandled(event, lastDispatchHandler_);
+        }
+    }
 
     if (!event.handled) {
         lastDispatchHandler_ = "none";
@@ -2777,6 +2845,10 @@ void DX12Demo::processEvent(Event& event)
 
 void DX12Demo::dispatchMouseEvent(Event& event)
 {
+    const bool isPress = event.type == Event::Type::MouseDown ||
+        event.type == Event::Type::MouseDoubleClick;
+    const bool isRelease = event.type == Event::Type::MouseUp;
+
     if (event.x < 0.0f || event.y < 0.0f || event.x > viewport_.Width || event.y > viewport_.Height) {
         event.handled = true;
         lastDispatchHandler_ = "bounds_reject";
@@ -2787,12 +2859,12 @@ void DX12Demo::dispatchMouseEvent(Event& event)
 
     auto& mgr = df::DockManager::instance();
 
-    if (event.type == Event::Type::MouseDown) {
+    if (isPress) {
         refreshLayoutState();
         updateHoverState({event.x, event.y});
     }
 
-    if (activeAction_ != ActionOwner::None && event.type != Event::Type::MouseDown) {
+    if (activeAction_ != ActionOwner::None && !isPress) {
         if (handleActiveAction(event)) {
             return;
         }
@@ -2819,7 +2891,7 @@ void DX12Demo::dispatchMouseEvent(Event& event)
     if (!event.handled && mgr.isFloatingDragging() && mgr.handleEvent(event)) {
         lastDispatchHandler_ = "floating_drag";
         eventConsole_.logHandled(event, lastDispatchHandler_);
-        if (event.type == Event::Type::MouseUp) {
+        if (isRelease) {
             activeWindow_ = nullptr;
             clearActiveAction();
             refreshLayoutState();
@@ -2830,7 +2902,7 @@ void DX12Demo::dispatchMouseEvent(Event& event)
 
     // 2) Floating windows first (top-most semantics).
     if (auto* win = df::WindowManager::instance().findWindowAtPoint(p)) {
-        if (event.type == Event::Type::MouseDown) {
+        if (isPress) {
             df::WindowManager::instance().bringToFront(win);
         }
         if (win->handleEvent(event)) {
@@ -2852,10 +2924,10 @@ void DX12Demo::dispatchMouseEvent(Event& event)
             const bool startedFloatingDrag = mgr.isFloatingDragging();
             lastDispatchHandler_ = startedFloatingDrag ? "floating_drag_start" : "floating_window";
             eventConsole_.logHandled(event, lastDispatchHandler_);
-            if (event.type == Event::Type::MouseDown) {
+            if (isPress) {
                 activeWindow_ = win;
                 activeAction_ = ActionOwner::FloatingWindow;
-            } else if (event.type == Event::Type::MouseUp) {
+            } else if (isRelease) {
                 clearActiveAction();
             }
             statusDirty_ = true;
@@ -2864,7 +2936,7 @@ void DX12Demo::dispatchMouseEvent(Event& event)
     }
 
     // 3) Tab strip interactions (currently disabled).
-    if (kEnableTabUi && !event.handled && event.type == Event::Type::MouseDown && beginTabGesture(event)) {
+    if (kEnableTabUi && !event.handled && isPress && beginTabGesture(event)) {
         statusDirty_ = true;
         return;
     }
@@ -2873,9 +2945,9 @@ void DX12Demo::dispatchMouseEvent(Event& event)
     if (!event.handled && mgr.handleEvent(event)) {
         lastDispatchHandler_ = "dock_drag";
         eventConsole_.logHandled(event, lastDispatchHandler_);
-        if (event.type == Event::Type::MouseDown) {
+        if (isPress) {
             activeAction_ = ActionOwner::DockWidgetDrag;
-        } else if (event.type == Event::Type::MouseUp) {
+        } else if (isRelease) {
             clearActiveAction();
         }
         statusDirty_ = true;
@@ -2892,7 +2964,7 @@ void DX12Demo::dispatchMouseEvent(Event& event)
             if (event.handled) {
                 lastDispatchHandler_ = std::string("widget:") + w->title();
                 eventConsole_.logHandled(event, lastDispatchHandler_);
-                if (event.type == Event::Type::MouseDown) {
+                if (isPress) {
                     if (mgr.isFloatingDragging()) {
                         activeAction_ = ActionOwner::FloatingWindow;
                         activeWindow_ = df::WindowManager::instance().findWindowAtPoint(p);
@@ -2911,9 +2983,9 @@ void DX12Demo::dispatchMouseEvent(Event& event)
     if (!event.handled && splitter_.handleEvent(event)) {
         lastDispatchHandler_ = "splitter";
         eventConsole_.logHandled(event, lastDispatchHandler_);
-        if (event.type == Event::Type::MouseDown) {
+        if (isPress) {
             activeAction_ = ActionOwner::SplitterDrag;
-        } else if (event.type == Event::Type::MouseUp) {
+        } else if (isRelease) {
             clearActiveAction();
         }
         refreshLayoutState();
