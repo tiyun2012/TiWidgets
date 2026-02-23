@@ -44,6 +44,12 @@ public:
         if (node.type != Node::Type::Tab) {
             return false;
         }
+        // Keep a single tab-shape language per frame. When stepped tabs are enabled
+        // we intentionally avoid vertical strips because they use a different shape
+        // family and look like duplicate/legacy styling.
+        if (CurrentTheme().drawSteppedTabShape) {
+            return false;
+        }
         if (bounds.width <= 0.0f || bounds.height <= 0.0f) {
             return false;
         }

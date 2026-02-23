@@ -72,31 +72,6 @@ void DrawHorizontalTabShape(
     }
 }
 
-void DrawHorizontalFlatTabShape(
-    Canvas& canvas,
-    const DFRect& tabRect,
-    const DFColor& fill,
-    const DFColor& outline,
-    float baseY)
-{
-    if (tabRect.width <= 2.0f || tabRect.height <= 2.0f) {
-        return;
-    }
-    const float topInset = std::max(1.0f, std::min(3.0f, tabRect.height * 0.32f));
-    const float topY = tabRect.y + topInset;
-    const float bottomY = std::max(topY + 1.0f, baseY);
-    const DFRect body{
-        tabRect.x,
-        topY,
-        tabRect.width,
-        std::max(1.0f, bottomY - topY + 1.0f)
-    };
-    canvas.drawRectangle(body, fill);
-    canvas.drawLine({body.x, topY}, {body.x + body.width, topY}, outline, 1.0f);
-    canvas.drawLine({body.x, topY}, {body.x, bottomY}, outline, 1.0f);
-    canvas.drawLine({body.x + body.width, topY}, {body.x + body.width, bottomY}, outline, 1.0f);
-}
-
 void DrawHorizontalSteppedTabShape(
     Canvas& canvas,
     const DFRect& tabRect,
@@ -116,8 +91,10 @@ void DrawHorizontalSteppedTabShape(
     const float shoulderRun = std::clamp(shoulderWidth, 2.0f, tabRect.width * 0.25f);
     const float leftTopX = left + shoulderRun;
     const float rightTopX = right - shoulderRun;
-    const float shoulderDrop = std::clamp(liftPx * 0.5f, 1.0f, std::max(1.0f, baseY - topY - 1.0f));
-    const float lowerY = std::min(baseY, topY + shoulderDrop);
+    // Keep only a thin base connector; avoid the old full-width lower body
+    // that looked like a rectangle behind tabs.
+    const float baseBandPx = 1.0f;
+    const float lowerY = std::max(topY, baseY - baseBandPx + 1.0f);
 
     // Approximate a stepped tab fill (center cap + lower body).
     canvas.drawRectangle(
@@ -258,7 +235,11 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
         if (bar.width > 1.0f && bar.height > 1.0f) {
             const float tabFontScale = std::clamp(theme.tabFontScale, 0.3f, 2.0f);
             const float barBottomY = bar.y + bar.height - 1.0f;
-            canvas.drawRectangle(bar, theme.tabStrip);
+            // Horizontal tabs should not paint a full strip block behind tabs.
+            // Keep strip fill only for vertical mode where it is the sidebar body.
+            if (verticalStrip) {
+                canvas.drawRectangle(bar, theme.tabStrip);
+            }
             const DFColor stripHi = ShiftColor(theme.tabStrip, 0.05f);
             const DFColor stripLo = ShiftColor(theme.tabStrip, -0.04f);
             if (verticalStrip) {
