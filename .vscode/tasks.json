@@ -1,0 +1,110 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Selected Target",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/${input:buildDir}",
+                "--target",
+                "${input:targetName}",
+                "--config",
+                "${input:launchConfig}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Run App Picker (for Attach)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/launch_pws.ps1",
+                "-BuildDir",
+                "${input:buildDir}",
+                "-Config",
+                "${input:launchConfig}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "List Built Apps",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/launch_pws.ps1",
+                "-BuildDir",
+                "${input:buildDir}",
+                "-Config",
+                "${input:launchConfig}",
+                "-ListOnly"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "IntelliSense Sanity Check",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/check_intellisense.ps1",
+                "-Config",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": "test"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "buildDir",
+            "type": "promptString",
+            "description": "Build directory",
+            "default": "build_dx12"
+        },
+        {
+            "id": "launchConfig",
+            "type": "pickString",
+            "description": "Build configuration",
+            "options": [
+                "Debug",
+                "Release",
+                "RelWithDebInfo",
+                "MinSizeRel"
+            ],
+            "default": "Debug"
+        },
+        {
+            "id": "targetName",
+            "type": "promptString",
+            "description": "CMake target name",
+            "default": "dx12_demo"
+        }
+    ]
+}

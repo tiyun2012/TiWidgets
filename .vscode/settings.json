@@ -1,0 +1,38 @@
+{
+    "cmake.configureOnOpen": true,
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.buildDirectory": "${workspaceFolder}/build_dx12",
+    "cmake.configureArgs": [
+        "-DWB_BUILD_DX12_DEMO=ON",
+        "-DCMAKE_CXX_STANDARD=17"
+    ],
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.default.cStandard": "c17",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/widgetsBase",
+        "${workspaceFolder}/**"
+    ],
+    "files.associations": {
+        "*.h": "cpp"
+    },
+    "C_Cpp.default.defines": [
+        "UNICODE",
+        "_UNICODE",
+        "WIN32_LEAN_AND_MEAN",
+        "NOMINMAX",
+        "_WIN32_WINNT=0x0A00",
+        "WINVER=0x0A00"
+    ],
+    "json.schemas": [
+        {
+            "fileMatch": [
+                "/.vscode/settings.json"
+            ],
+            "url": "vscode://schemas/settings/folder"
+        }
+    ]
+}

@@ -1,0 +1,66 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Target (Target + Config)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/${input:buildDir}/bin/${input:launchConfig}/${input:targetName}.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal",
+            "preLaunchTask": "Build Selected Target"
+        },
+        {
+            "name": "Debug EXE Path (Prompt)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${input:exePath}",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Attach To Running Process",
+            "type": "cppvsdbg",
+            "request": "attach",
+            "processId": "${command:pickProcess}"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "buildDir",
+            "type": "promptString",
+            "description": "Build directory",
+            "default": "build_dx12"
+        },
+        {
+            "id": "launchConfig",
+            "type": "pickString",
+            "description": "Build configuration",
+            "options": [
+                "Debug",
+                "Release",
+                "RelWithDebInfo",
+                "MinSizeRel"
+            ],
+            "default": "Debug"
+        },
+        {
+            "id": "targetName",
+            "type": "promptString",
+            "description": "CMake target name (without .exe)",
+            "default": "dx12_demo"
+        },
+        {
+            "id": "exePath",
+            "type": "promptString",
+            "description": "Full path to executable",
+            "default": "${workspaceFolder}/build_dx12/bin/Debug/dx12_demo.exe"
+        }
+    ]
+}
