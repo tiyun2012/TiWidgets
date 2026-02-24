@@ -281,13 +281,15 @@ void WindowFrame::render(Canvas& canvas)
         const float textLeft = titleBar.x + 8.0f;
         const float textRight = titleBar.x + titleBar.width - CLOSE_BUTTON_SIZE - CLOSE_BUTTON_PADDING - 8.0f;
         const float maxWidth = std::max(0.0f, textRight - textLeft);
-        const std::string caption = DFClipTextToWidth(content_->title(), maxWidth, true);
+        const float titleFontScale = std::clamp(theme.tabFontScale, 0.3f, 2.0f);
+        const std::string caption = DFClipTextToWidth(content_->title(), maxWidth, true, titleFontScale);
         if (!caption.empty()) {
             const float luminance = theme.titleBar.r * 0.2126f + theme.titleBar.g * 0.7152f + theme.titleBar.b * 0.0722f;
             const DFColor textColor = (luminance > 0.50f)
                 ? DFColor{0.08f, 0.09f, 0.10f, 1.0f}
                 : DFColor{0.90f, 0.91f, 0.94f, 1.0f};
-            canvas.drawText(textLeft, DFTextBaselineYForRect(titleBar), caption, textColor);
+            const float textTop = DFTextBaselineYForRect(titleBar, titleFontScale);
+            DFDrawText(canvas, textLeft, textTop, caption, textColor, titleFontScale, theme.smoothFont);
         }
     }
 

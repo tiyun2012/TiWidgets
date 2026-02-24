@@ -1191,6 +1191,10 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
         title.resize(static_cast<size_t>(written));
     } else {
         title.clear();
+        if (hostWidget) {
+            const std::string fallback = hostWidget->title();
+            title.assign(fallback.begin(), fallback.end());
+        }
     }
 
     RECT closeRect = drawTitleIcons ? NativeHostCloseRect(rc) : RECT{rc.right, 0, rc.right, 0};
@@ -1236,12 +1240,13 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
         static_cast<float>(std::max(0L, textRect.right - textRect.left)),
         static_cast<float>(std::max(0L, textRect.bottom - textRect.top))
     };
-    const std::string clippedTitle = DFClipTextToWidth(titleText, textRectF.width, true);
+    const float titleFontScale = std::clamp(theme.tabFontScale, 0.3f, 2.0f);
+    const std::string clippedTitle = DFClipTextToWidth(titleText, textRectF.width, true, titleFontScale);
     if (!clippedTitle.empty()) {
         const int savedDc = SaveDC(hdc);
         IntersectClipRect(hdc, textRect.left, textRect.top, textRect.right, textRect.bottom);
         HBRUSH textBrush = CreateSolidBrush(titleTextColor);
-        const bool smoothText = DFTextSmooth();
+        const bool smoothText = theme.smoothFont;
         HPEN noPen = nullptr;
         HGDIOBJ oldPen = nullptr;
         if (smoothText) {
@@ -1250,7 +1255,7 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
         }
         DFDrawBitmapTextPixels(
             textRectF.x,
-            DFTextBaselineYForRect(textRectF),
+            DFTextBaselineYForRect(textRectF, titleFontScale),
             clippedTitle,
             [&](float px, float py, float w, float h) {
                 if (smoothText) {
@@ -1258,10 +1263,22 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
                     const int top = static_cast<int>(std::floor(py));
                     const int right = static_cast<int>(std::ceil(px + w));
                     const int bottom = static_cast<int>(std::ceil(py + h));
-                    const int radius = std::max(1, static_cast<int>(std::round(w * 0.65f)));
-                    HGDIOBJ oldBrush = SelectObject(hdc, textBrush);
-                    RoundRect(hdc, left, top, right, bottom, radius, radius);
-                    SelectObject(hdc, oldBrush);
+                    RECT pixelRect{
+                        static_cast<LONG>(left),
+                        static_cast<LONG>(top),
+                        static_cast<LONG>(right),
+                        static_cast<LONG>(bottom)
+                    };
+                    // Very small glyph cells (<=1px after rasterization) can
+                    // disappear with RoundRect in GDI. Fall back to solid fill.
+                    if ((right - left) < 2 || (bottom - top) < 2) {
+                        FillRect(hdc, &pixelRect, textBrush);
+                    } else {
+                        const int radius = std::max(1, static_cast<int>(std::round(w * 0.35f)));
+                        HGDIOBJ oldBrush = SelectObject(hdc, textBrush);
+                        RoundRect(hdc, left, top, right, bottom, radius, radius);
+                        SelectObject(hdc, oldBrush);
+                    }
                     return;
                 }
                 RECT pixelRect{
@@ -1271,7 +1288,8 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
                     static_cast<LONG>(std::ceil(py + h))
                 };
                 FillRect(hdc, &pixelRect, textBrush);
-            });
+            },
+            titleFontScale);
         if (smoothText) {
             SelectObject(hdc, oldPen);
         }
