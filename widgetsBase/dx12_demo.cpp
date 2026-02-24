@@ -713,6 +713,7 @@ private:
         HWND hwnd = nullptr;
         df::WindowFrame* frame = nullptr;
         bool syncing = false;
+        bool dockDragActive = false;
     };
     std::unordered_map<df::DockWidget*, NativeFloatingHost> nativeFloatingHosts_;
     std::vector<df::DockWidget*> pendingNativeHostClose_;
@@ -1881,15 +1882,13 @@ bool DX12Demo::tryDockNativeFloatingHost(df::DockWidget* widget, HWND hwnd)
     const DFPoint mousePos{static_cast<float>(local.x), static_cast<float>(local.y)};
 
     // Use the same DockManager drop-resolution path as in-client floating drags.
-    // Dock only when a valid highlighted drop target is active at release.
+    // Dock only when a real drag session is active for this exact frame.
     if (it->second.frame) {
         auto& mgr = df::DockManager::instance();
-        if (!mgr.isFloatingDragging()) {
-            mgr.startFloatingDrag(it->second.frame, mousePos);
-            mgr.updateFloatingDrag(mousePos);
-        } else {
-            mgr.updateFloatingDrag(mousePos);
+        if (!mgr.isFloatingDragging() || mgr.floatingDragWindow() != it->second.frame) {
+            return false;
         }
+        mgr.updateFloatingDrag(mousePos);
         mgr.endFloatingDrag(mousePos);
         return !widget->isFloating();
     }
@@ -2568,6 +2567,17 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
     auto* demo = reinterpret_cast<DX12Demo*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
     auto* widget = reinterpret_cast<df::DockWidget*>(GetPropW(hWnd, L"DF_FLOAT_WIDGET"));
 
+    auto findHost = [demo, widget]() -> DX12Demo::NativeFloatingHost* {
+        if (!demo || !widget) {
+            return nullptr;
+        }
+        auto it = demo->nativeFloatingHosts_.find(widget);
+        if (it == demo->nativeFloatingHosts_.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    };
+
     auto cursorToMainClient = [demo]() -> DFPoint {
         POINT cursor{};
         if (!demo || !GetCursorPos(&cursor)) {
@@ -2645,15 +2655,32 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
     case WM_ENTERSIZEMOVE:
         if (demo && widget) {
             if (auto* frame = df::WindowManager::instance().findWindowByContent(widget)) {
+                auto* host = findHost();
                 const DFPoint localMouse = cursorToMainClient();
                 auto& mgr = df::DockManager::instance();
-                // Start tracking native floating drags here; docking candidates are
-                // updated continuously in WM_MOVING.
+                // WM_ENTERSIZEMOVE is raised for both move and resize.
+                // Only caption-move should enter docking drag mode.
+                POINT cursor{};
+                LRESULT hit = HTCLIENT;
+                if (GetCursorPos(&cursor)) {
+                    hit = SendMessageW(
+                        hWnd,
+                        WM_NCHITTEST,
+                        0,
+                        MAKELPARAM(cursor.x, cursor.y));
+                }
+                const bool isCaptionMove = (hit == HTCAPTION);
+                if (host) {
+                    host->dockDragActive = false;
+                }
                 if (mgr.isFloatingDragging() && mgr.floatingDragWindow() != frame) {
                     mgr.cancelFloatingDrag();
                 }
-                if (!mgr.isFloatingDragging()) {
+                if (isCaptionMove && !mgr.isFloatingDragging()) {
                     mgr.startFloatingDrag(frame, localMouse);
+                    if (host) {
+                        host->dockDragActive = true;
+                    }
                 }
                 demo->activeWindow_ = frame;
                 demo->activeAction_ = ActionOwner::FloatingWindow;
@@ -2670,10 +2697,16 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
         break;
     case WM_MOVING:
         if (demo && widget) {
+            auto* host = findHost();
             auto* frame = df::WindowManager::instance().findWindowByContent(widget);
             auto& mgr = df::DockManager::instance();
             if (!frame) {
                 mgr.cancelFloatingDrag();
+                return DefWindowProcW(hWnd, msg, wParam, lParam);
+            }
+            // Ignore resize loops: WM_MOVING should only drive dock-preview when
+            // a caption drag explicitly started dock drag mode.
+            if (!host || !host->dockDragActive) {
                 return DefWindowProcW(hWnd, msg, wParam, lParam);
             }
             if (mgr.isFloatingDragging() && mgr.floatingDragWindow() != frame) {
@@ -2703,6 +2736,7 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     case WM_EXITSIZEMOVE:
         if (demo && widget) {
+            auto* host = findHost();
             demo->onNativeFloatingHostMovedOrSized(widget, hWnd);
             if (auto* frame = df::WindowManager::instance().findWindowByContent(widget)) {
                 auto& mgr = df::DockManager::instance();
@@ -2710,8 +2744,11 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
                     mgr.cancelFloatingDrag();
                 }
             }
-            if (demo->tryDockNativeFloatingHost(widget, hWnd)) {
-                return 0;
+            if (host && host->dockDragActive) {
+                host->dockDragActive = false;
+                if (demo->tryDockNativeFloatingHost(widget, hWnd)) {
+                    return 0;
+                }
             }
             // Ensure drag lifecycle is closed even when docking did not occur.
             df::DockManager::instance().cancelFloatingDrag();
