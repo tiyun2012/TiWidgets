@@ -298,8 +298,12 @@ void WindowFrame::render(Canvas& canvas)
         float closeY = bounds_.y + CLOSE_BUTTON_PADDING;
         DFRect closeButton{closeX, closeY, CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE};
         DockIconButtonStyle style{};
+        style.iconBase = {0.96f, 0.97f, 1.0f, 1.0f};
+        style.iconHover = {1.0f, 1.0f, 1.0f, 1.0f};
+        style.iconThickness = 2.2f;
+        style.hoverIconThickness = 2.4f;
         style.roundHoverBackground = true;
-        style.hoverCornerRadius = 4.0f;
+        style.hoverCornerRadius = 2.667f;
         DrawDockIconButton(canvas, DockIcon::Close, closeButton, theme.titleBar, closeHovered_, style);
     }
 

@@ -47,10 +47,10 @@ private:
     bool closeRequested_ = false;
     bool closeHovered_ = false;
 
-    static constexpr float TITLE_BAR_HEIGHT = 24.0f;
+    static constexpr float TITLE_BAR_HEIGHT = 11.0f;
     static constexpr float RESIZE_HANDLE_SIZE = 8.0f;
-    static constexpr float CLOSE_BUTTON_SIZE = 16.0f;
-    static constexpr float CLOSE_BUTTON_PADDING = 4.0f;
+    static constexpr float CLOSE_BUTTON_SIZE = 8.0f;
+    static constexpr float CLOSE_BUTTON_PADDING = 1.0f;
 };
 
 class WindowManager {

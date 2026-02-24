@@ -577,10 +577,10 @@ struct NativeFloatingHostCreateData {
 };
 
 constexpr const wchar_t* kNativeFloatingHostClass = L"DFNativeFloatingHostWnd";
-constexpr int kNativeHostTitleBarHeight = 28;
-constexpr int kNativeHostCloseSize = 14;
-constexpr int kNativeHostCloseMargin = 6;
-constexpr int kNativeHostCloseCornerRadius = 5;
+constexpr int kNativeHostTitleBarHeight = 13;
+constexpr int kNativeHostCloseSize = 8;
+constexpr int kNativeHostCloseMargin = 3;
+constexpr int kNativeHostCloseCornerRadius = 3;
 
 RECT NativeHostCloseRect(const RECT& clientRect)
 {
@@ -1134,7 +1134,7 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
     const COLORREF titleColor = ToColorRef(theme.titleBar);
     const COLORREF bodyColor = ToColorRef(theme.dockBackground);
     const COLORREF titleTextColor = ContrastTextColor(theme.titleBar);
-    const DFColor closeBase = DFColorFromHex(0xE6E8EF);
+    const DFColor closeBase = DFColorFromHex(0xF1F4FF);
     const DFColor closeHover = DFColorFromHex(0xFFFFFF);
 
     RECT titleRect = rc;
@@ -1247,16 +1247,19 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
         const int savedDc = SaveDC(hdc);
         IntersectClipRect(hdc, textRect.left, textRect.top, textRect.right, textRect.bottom);
         HBRUSH textBrush = CreateSolidBrush(titleTextColor);
-        const bool smoothText = theme.smoothFont;
+        // Keep native host text crisp: avoid rounded pixel smoothing in GDI.
+        const bool smoothText = false;
         HPEN noPen = nullptr;
         HGDIOBJ oldPen = nullptr;
         if (smoothText) {
             noPen = static_cast<HPEN>(GetStockObject(NULL_PEN));
             oldPen = SelectObject(hdc, noPen);
         }
+        const float textX = std::floor(textRectF.x);
+        const float textY = std::floor(DFTextBaselineYForRect(textRectF, titleFontScale));
         DFDrawBitmapTextPixels(
-            textRectF.x,
-            DFTextBaselineYForRect(textRectF, titleFontScale),
+            textX,
+            textY,
             clippedTitle,
             [&](float px, float py, float w, float h) {
                 if (smoothText) {
@@ -1301,19 +1304,43 @@ void DX12Demo::paintNativeFloatingHost(HWND hwnd)
     if (drawTitleIcons) {
         const DFColor iconColor = closeHoverActive ? closeHover : closeBase;
         const COLORREF iconRef = ToColorRef(iconColor);
-        HPEN pen = CreatePen(PS_SOLID, 1, iconRef);
-        HGDIOBJ oldPen = SelectObject(hdc, pen);
-        const int iconPadding = 4;
+        const int closeW = std::max(1, static_cast<int>(closeRect.right - closeRect.left));
+        const int closeH = std::max(1, static_cast<int>(closeRect.bottom - closeRect.top));
+        const int iconMin = std::min(closeW, closeH);
+        const int iconPadding = (iconMin <= 9) ? 1 : 2;
+        const int stroke = (iconMin <= 11) ? 2 : 1;
         const int ix0 = static_cast<int>(closeRect.left) + iconPadding;
         const int iy0 = static_cast<int>(closeRect.top) + iconPadding;
         const int ix1 = std::max(ix0, static_cast<int>(closeRect.right) - iconPadding - 1);
         const int iy1 = std::max(iy0, static_cast<int>(closeRect.bottom) - iconPadding - 1);
-        MoveToEx(hdc, ix0, iy0, nullptr);
-        LineTo(hdc, ix1, iy1);
-        MoveToEx(hdc, ix0, iy1, nullptr);
-        LineTo(hdc, ix1, iy0);
-        SelectObject(hdc, oldPen);
-        DeleteObject(pen);
+        HBRUSH iconBrush = CreateSolidBrush(iconRef);
+        auto drawPixel = [&](int x, int y) {
+            const int half = stroke / 2;
+            RECT r{
+                x - half,
+                y - half,
+                x - half + stroke,
+                y - half + stroke
+            };
+            FillRect(hdc, &r, iconBrush);
+        };
+        auto drawDiag = [&](int x0, int y0, int x1, int y1) {
+            const int dx = x1 - x0;
+            const int dy = y1 - y0;
+            const int steps = std::max(std::abs(dx), std::abs(dy));
+            if (steps <= 0) {
+                drawPixel(x0, y0);
+                return;
+            }
+            for (int i = 0; i <= steps; ++i) {
+                const int x = x0 + (dx * i + (dx >= 0 ? steps / 2 : -steps / 2)) / steps;
+                const int y = y0 + (dy * i + (dy >= 0 ? steps / 2 : -steps / 2)) / steps;
+                drawPixel(x, y);
+            }
+        };
+        drawDiag(ix0, iy0, ix1, iy1);
+        drawDiag(ix0, iy1, ix1, iy0);
+        DeleteObject(iconBrush);
     }
 
     EndPaint(hwnd, &ps);
