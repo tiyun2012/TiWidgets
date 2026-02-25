@@ -61,6 +61,18 @@ const char* DropZoneName(df::DragOverlay::DropZone zone)
     }
 }
 
+const char* TabPositionName(df::TabPosition pos)
+{
+    switch (pos) {
+    case df::TabPosition::Top: return "top";
+    case df::TabPosition::Bottom: return "bottom";
+    case df::TabPosition::Left: return "left";
+    case df::TabPosition::Right: return "right";
+    default:
+        return "top";
+    }
+}
+
 const char* NodeTypeName(const Node* node)
 {
     if (!node) {
@@ -285,6 +297,22 @@ DFRect MakeBottomEdgeTabHintRect(const DFRect& stripRect)
     };
 }
 
+DFRect MakeTopEdgeTabHintRect(const DFRect& stripRect)
+{
+    const DFRect inner = InsetRect(stripRect, 3.0f, 1.0f);
+    const float hintH = std::clamp(inner.height * 0.28f, 4.0f, 8.0f);
+    const float preferredW = std::clamp(inner.width * 0.28f, 84.0f, 220.0f);
+    const float hintW = std::min(inner.width, preferredW);
+    const float x = inner.x + std::max(0.0f, (inner.width - hintW) * 0.5f);
+    const float y = inner.y + 1.0f;
+    return {
+        x,
+        y,
+        hintW,
+        hintH
+    };
+}
+
 DFRect MakeRightEdgeTabHintRect(const DFRect& stripRect)
 {
     const DFRect inner = InsetRect(stripRect, 1.0f, 3.0f);
@@ -299,6 +327,72 @@ DFRect MakeRightEdgeTabHintRect(const DFRect& stripRect)
         hintW,
         hintH
     };
+}
+
+DFRect MakeLeftEdgeTabHintRect(const DFRect& stripRect)
+{
+    const DFRect inner = InsetRect(stripRect, 1.0f, 3.0f);
+    const float hintW = std::clamp(inner.width * 0.32f, 4.0f, 8.0f);
+    const float preferredH = std::clamp(inner.height * 0.26f, 84.0f, 220.0f);
+    const float hintH = std::min(inner.height, preferredH);
+    const float x = inner.x + 1.0f;
+    const float y = inner.y + std::max(0.0f, (inner.height - hintH) * 0.5f);
+    return {
+        x,
+        y,
+        hintW,
+        hintH
+    };
+}
+
+DFRect MakeTabHintRectForPosition(const DFRect& stripRect, df::TabPosition pos)
+{
+    switch (pos) {
+    case df::TabPosition::Top:
+        return MakeTopEdgeTabHintRect(stripRect);
+    case df::TabPosition::Bottom:
+        return MakeBottomEdgeTabHintRect(stripRect);
+    case df::TabPosition::Left:
+        return MakeLeftEdgeTabHintRect(stripRect);
+    case df::TabPosition::Right:
+        return MakeRightEdgeTabHintRect(stripRect);
+    default:
+        return MakeTopEdgeTabHintRect(stripRect);
+    }
+}
+
+df::TabPosition PredictTabPosition(const DFRect& targetBounds, const DFPoint& mousePos, const Node* targetNode)
+{
+    // Sticky rule: existing tab groups keep their current strip side.
+    if (targetNode && targetNode->type == Node::Type::Tab) {
+        if (targetNode->tabPositionExplicit) {
+            return targetNode->tabPosition;
+        }
+        return df::DockLayout::TabStripPosition(*targetNode, targetBounds);
+    }
+
+    const float distTop = std::abs(mousePos.y - targetBounds.y);
+    const float distBottom = std::abs((targetBounds.y + targetBounds.height) - mousePos.y);
+    const float distLeft = std::abs(mousePos.x - targetBounds.x);
+    const float distRight = std::abs((targetBounds.x + targetBounds.width) - mousePos.x);
+
+    float minDist = distTop;
+    df::TabPosition predicted = df::TabPosition::Top;
+    if (distBottom < minDist) {
+        minDist = distBottom;
+        predicted = df::TabPosition::Bottom;
+    }
+    if (distLeft < minDist) {
+        minDist = distLeft;
+        predicted = df::TabPosition::Left;
+    }
+    if (distRight < minDist) {
+        predicted = df::TabPosition::Right;
+    }
+
+    // New tab groups follow direct edge intent (nearest edge).
+    // Existing tab groups remain sticky by the early return above.
+    return predicted;
 }
 
 bool IsEdgeDropZone(df::DragOverlay::DropZone zone)
@@ -1183,8 +1277,9 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
 
         const Node* node = static_cast<const Node*>(hovered->target);
         PopupTracePrint(
-            "[popup] hover zone=%s depth=%d target_type=%s target_title=\"%s\" rect=(%.1f,%.1f %.1fx%.1f) mouse=(%.1f,%.1f)",
+            "[popup] hover zone=%s tab_pos=%s depth=%d target_type=%s target_title=\"%s\" rect=(%.1f,%.1f %.1fx%.1f) mouse=(%.1f,%.1f)",
             DropZoneName(hovered->zone),
+            TabPositionName(hovered->tabPosition),
             hovered->depth,
             NodeTypeName(node),
             NodePrimaryWidgetTitle(node),
@@ -1298,7 +1393,12 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         return (translatedOverlap > rawOverlap + 0.5f) ? translated : nodeBounds;
     };
 
-    auto addCandidate = [this, &rootContainer, &rectIntersection](DragOverlay::DropZone zone, Node* target, const DFRect& bounds, int depth) {
+    auto addCandidate = [this, &rootContainer, &rectIntersection](
+        DragOverlay::DropZone zone,
+        Node* target,
+        const DFRect& bounds,
+        int depth,
+        TabPosition tabPosition = TabPosition::Top) {
         const DFRect clipped = rectIntersection(bounds, rootContainer);
         if (clipped.width <= 1.0f || clipped.height <= 1.0f) {
             return;
@@ -1310,6 +1410,7 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         entry.bounds = clipped;
         entry.overlayIndex = overlayIndex;
         entry.depth = depth;
+        entry.tabPosition = tabPosition;
         dropCandidates_.push_back(entry);
     };
 
@@ -1365,40 +1466,67 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
 
     DockWidget* movingWidget = draggedFloatingWindow_->content();
     // Tab docking hints: only appear when cursor is inside a real tab/header strip.
-    std::function<void(Node*, int, const DFRect*)> collectTabTargets = [&](Node* node, int depth, const DFRect* parentRootBounds) {
+    std::function<void(Node*, int, bool, const DFRect*)> collectTabTargets =
+        [&](Node* node, int depth, bool insideTabContainer, const DFRect* parentRootBounds) {
         if (!node) {
             return;
         }
         const DFRect nodeBoundsRoot = resolveNodeBoundsToRoot(node->bounds, parentRootBounds);
 
-        if (node->type == Node::Type::Widget && node->widget && node->widget != movingWidget) {
+        if (!insideTabContainer &&
+            node->type == Node::Type::Widget &&
+            node->widget &&
+            node->widget != movingWidget) {
             const DFRect panelBounds = nodeBoundsRoot;
-            const float headerH = std::clamp(DefaultTabBarHeightPx(), 0.0f, std::max(0.0f, panelBounds.height));
-            const DFRect headerRect{panelBounds.x, panelBounds.y, panelBounds.width, headerH};
-            // Keep tab hints strictly inside the panel header strip and aligned
-            // to the bottom edge for a cleaner target.
-            const DFRect tabHintRect = MakeBottomEdgeTabHintRect(headerRect);
+            const TabPosition predictedPos = PredictTabPosition(panelBounds, mousePos, node);
+            const float horizontalT = std::clamp(DefaultTabBarHeightPx(), 0.0f, std::max(0.0f, panelBounds.height));
+            const float verticalT = std::clamp(DefaultTabBarHeightPx(), 0.0f, std::max(0.0f, panelBounds.width));
+            DFRect stripRect = panelBounds;
+            switch (predictedPos) {
+            case TabPosition::Top:
+                stripRect = {panelBounds.x, panelBounds.y, panelBounds.width, horizontalT};
+                break;
+            case TabPosition::Bottom:
+                stripRect = {
+                    panelBounds.x,
+                    panelBounds.y + std::max(0.0f, panelBounds.height - horizontalT),
+                    panelBounds.width,
+                    horizontalT
+                };
+                break;
+            case TabPosition::Left:
+                stripRect = {panelBounds.x, panelBounds.y, verticalT, panelBounds.height};
+                break;
+            case TabPosition::Right:
+                stripRect = {
+                    panelBounds.x + std::max(0.0f, panelBounds.width - verticalT),
+                    panelBounds.y,
+                    verticalT,
+                    panelBounds.height
+                };
+                break;
+            }
+            const DFRect tabHintRect = MakeTabHintRectForPosition(stripRect, predictedPos);
             if (tabHintRect.width > 1.0f && tabHintRect.height > 1.0f && tabHintRect.contains(mousePos)) {
-                addCandidate(DragOverlay::DropZone::Tab, node, tabHintRect, depth);
+                addCandidate(DragOverlay::DropZone::Tab, node, tabHintRect, depth, predictedPos);
             }
             return;
         }
 
         if (node->type == Node::Type::Tab && !node->children.empty()) {
+            const TabPosition predictedPos = PredictTabPosition(nodeBoundsRoot, mousePos, node);
             const DFRect barRect = DockLayout::TabStripRect(*node, nodeBoundsRoot);
-            const bool verticalStrip = DockLayout::UseVerticalTabStrip(*node, nodeBoundsRoot);
-            const DFRect tabHintRect = verticalStrip
-                ? MakeRightEdgeTabHintRect(barRect)
-                : MakeBottomEdgeTabHintRect(barRect);
+            const DFRect tabHintRect = MakeTabHintRectForPosition(barRect, predictedPos);
             if (tabHintRect.width > 1.0f && tabHintRect.height > 1.0f && tabHintRect.contains(mousePos)) {
-                addCandidate(DragOverlay::DropZone::Tab, node, tabHintRect, depth);
+                addCandidate(DragOverlay::DropZone::Tab, node, tabHintRect, depth, predictedPos);
             }
         }
 
-        collectTabTargets(node->first.get(), depth + 1, &nodeBoundsRoot);
-        collectTabTargets(node->second.get(), depth + 1, &nodeBoundsRoot);
+        const bool childInsideTabContainer = insideTabContainer || (node->type == Node::Type::Tab);
+        collectTabTargets(node->first.get(), depth + 1, childInsideTabContainer, &nodeBoundsRoot);
+        collectTabTargets(node->second.get(), depth + 1, childInsideTabContainer, &nodeBoundsRoot);
         for (auto& child : node->children) {
-            collectTabTargets(child.get(), depth + 1, &nodeBoundsRoot);
+            collectTabTargets(child.get(), depth + 1, childInsideTabContainer, &nodeBoundsRoot);
         }
     };
 
@@ -1431,12 +1559,14 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         }
 
         const bool hasTabStrip = (node->type == Node::Type::Tab);
-        const bool tabStripVertical = hasTabStrip && DockLayout::UseVerticalTabStrip(*node, b);
         const DFRect tabStripRect = hasTabStrip ? DockLayout::TabStripRect(*node, b) : DFRect{};
-        const float leftInset = tabStripVertical ? tabStripRect.width : 0.0f;
-        const float topInset = (!tabStripVertical && hasTabStrip) ? tabStripRect.height : 0.0f;
-        const float contentW = std::max(0.0f, b.width - leftInset);
-        const float contentH = std::max(0.0f, b.height - topInset);
+        const TabPosition tabPos = hasTabStrip ? DockLayout::TabStripPosition(*node, b) : TabPosition::Top;
+        const float leftInset = (hasTabStrip && tabPos == TabPosition::Left) ? tabStripRect.width : 0.0f;
+        const float rightInset = (hasTabStrip && tabPos == TabPosition::Right) ? tabStripRect.width : 0.0f;
+        const float topInset = (hasTabStrip && tabPos == TabPosition::Top) ? tabStripRect.height : 0.0f;
+        const float bottomInset = (hasTabStrip && tabPos == TabPosition::Bottom) ? tabStripRect.height : 0.0f;
+        const float contentW = std::max(0.0f, b.width - leftInset - rightInset);
+        const float contentH = std::max(0.0f, b.height - topInset - bottomInset);
         if (contentW <= 2.0f || contentH <= 2.0f) {
             return;
         }
@@ -1444,6 +1574,7 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         const float zoneW = std::min(innerSplitSnapZonePx_, contentW * 0.4f);
         const float zoneH = std::min(innerSplitSnapZonePx_, contentH * 0.4f);
         const DFRect contentBounds{b.x + leftInset, b.y + topInset, contentW, contentH};
+        const TabPosition predictedPos = PredictTabPosition(b, mousePos, node);
         const DFRect leftZone{contentBounds.x, contentBounds.y, zoneW, contentBounds.height};
         const DFRect rightZone{
             contentBounds.x + contentBounds.width - zoneW,
@@ -1458,6 +1589,8 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
             contentBounds.width,
             zoneH
         };
+        DFRect centerZone{};
+        const bool hasCenterZone = ComputeTabDockCenterZone(contentBounds, centerZone);
 
         if (leftZone.contains(mousePos)) {
             addCandidate(DragOverlay::DropZone::Left, node, leftZone, depth);
@@ -1467,12 +1600,14 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
             addCandidate(DragOverlay::DropZone::Top, node, topZone, depth);
         } else if (bottomZone.contains(mousePos)) {
             addCandidate(DragOverlay::DropZone::Bottom, node, bottomZone, depth);
+        } else if (hasCenterZone && centerZone.contains(mousePos)) {
+            addCandidate(DragOverlay::DropZone::Center, node, centerZone, depth, predictedPos);
         }
     };
 
     if (mainLayout_) {
         const DFRect rootBoundsSeed = rootContainer;
-        collectTabTargets(mainLayout_->root(), 1, &rootBoundsSeed);
+        collectTabTargets(mainLayout_->root(), 1, false, &rootBoundsSeed);
         collectSplitTargets(mainLayout_->root(), 1, false, &rootBoundsSeed);
     }
 
@@ -1521,6 +1656,12 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
     if (candidate && candidate->zone == DragOverlay::DropZone::Tab &&
         !candidate->bounds.contains(mousePos)) {
         candidate = nullptr;
+    }
+    TabPosition dropTabPosition = TabPosition::Top;
+    if (candidate &&
+        (candidate->zone == DragOverlay::DropZone::Tab ||
+         candidate->zone == DragOverlay::DropZone::Center)) {
+        dropTabPosition = candidate->tabPosition;
     }
 
     WindowFrame* sourceWindow = draggedFloatingWindow_;
@@ -1636,7 +1777,9 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
         return;
     }
 
-    const bool forceTabAfterDock = true;
+    // Respect resolved drop zones by default:
+    // edge zones create splits, center/tab zones create tab groups.
+    const bool forceTabAfterDock = false;
     const DragOverlay::DropZone appliedZone =
         (forceTabAfterDock &&
          candidate->target != nullptr &&
@@ -1644,12 +1787,17 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
          candidate->zone != DragOverlay::DropZone::Tab)
             ? DragOverlay::DropZone::Tab
             : candidate->zone;
+    if (appliedZone == DragOverlay::DropZone::Tab && candidate->target) {
+        Node* predictedTarget = static_cast<Node*>(candidate->target);
+        dropTabPosition = PredictTabPosition(predictedTarget->bounds, mousePos, predictedTarget);
+    }
     const Node* targetNodeInfo = static_cast<const Node*>(candidate->target);
     PopupTracePrint(
-        "[popup] drop_result mode=dock widget=\"%s\" zone=%s applied_zone=%s depth=%d target_type=%s target_title=\"%s\"",
+        "[popup] drop_result mode=dock widget=\"%s\" zone=%s applied_zone=%s tab_pos=%s depth=%d target_type=%s target_title=\"%s\"",
         widget->title().c_str(),
         DropZoneName(candidate->zone),
         DropZoneName(appliedZone),
+        TabPositionName(dropTabPosition),
         candidate->depth,
         NodeTypeName(targetNodeInfo),
         NodePrimaryWidgetTitle(targetNodeInfo));
@@ -1675,6 +1823,10 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
             // instead of creating nested tab-in-tab structures.
             if (auto* parentTabHandle = FindParentTabHandle(root, targetNode);
                 parentTabHandle && *parentTabHandle && (*parentTabHandle)->type == Node::Type::Tab) {
+                if (appliedZone == DragOverlay::DropZone::Tab) {
+                    (*parentTabHandle)->tabPosition = dropTabPosition;
+                    (*parentTabHandle)->tabPositionExplicit = true;
+                }
                 (*parentTabHandle)->children.push_back(std::move(newLeaf));
                 (*parentTabHandle)->activeTab = static_cast<int>((*parentTabHandle)->children.size()) - 1;
                 NormalizeNode(root);
@@ -1687,6 +1839,10 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
             auto* handle = FindNodeHandle(root, targetNode);
             if (handle && *handle) {
                 if ((*handle)->type == Node::Type::Tab) {
+                    if (appliedZone == DragOverlay::DropZone::Tab) {
+                        (*handle)->tabPosition = dropTabPosition;
+                        (*handle)->tabPositionExplicit = true;
+                    }
                     (*handle)->children.push_back(std::move(newLeaf));
                     (*handle)->activeTab = static_cast<int>((*handle)->children.size()) - 1;
                 } else if ((*handle)->type == Node::Type::Widget) {
@@ -1697,6 +1853,8 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
                     auto tabNode = std::make_unique<Node>();
                     tabNode->type = Node::Type::Tab;
                     tabNode->tabBarHeight = DefaultTabBarHeightPx();
+                    tabNode->tabPosition = dropTabPosition;
+                    tabNode->tabPositionExplicit = true;
                     tabNode->children.push_back(std::move(existingLeaf));
                     tabNode->children.push_back(std::move(newLeaf));
                     tabNode->activeTab = 1;
@@ -1705,6 +1863,8 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
                     auto tabNode = std::make_unique<Node>();
                     tabNode->type = Node::Type::Tab;
                     tabNode->tabBarHeight = DefaultTabBarHeightPx();
+                    tabNode->tabPosition = dropTabPosition;
+                    tabNode->tabPositionExplicit = true;
                     tabNode->children.push_back(std::move(*handle));
                     tabNode->children.push_back(std::move(newLeaf));
                     tabNode->activeTab = 1;
@@ -1714,6 +1874,8 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
                 auto tabNode = std::make_unique<Node>();
                 tabNode->type = Node::Type::Tab;
                 tabNode->tabBarHeight = DefaultTabBarHeightPx();
+                tabNode->tabPosition = dropTabPosition;
+                tabNode->tabPositionExplicit = true;
                 tabNode->children.push_back(std::move(root));
                 tabNode->children.push_back(std::move(newLeaf));
                 tabNode->activeTab = 1;
@@ -1723,6 +1885,8 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
             auto tabNode = std::make_unique<Node>();
             tabNode->type = Node::Type::Tab;
             tabNode->tabBarHeight = DefaultTabBarHeightPx();
+            tabNode->tabPosition = dropTabPosition;
+            tabNode->tabPositionExplicit = true;
             tabNode->children.push_back(std::move(root));
             tabNode->children.push_back(std::move(newLeaf));
             tabNode->activeTab = 1;

@@ -14,6 +14,8 @@ class Event;
 
 namespace df {
 
+enum class TabPosition { Top, Bottom, Left, Right };
+
 class DockWidget;
 class DockArea;
 class DockContainer;
@@ -206,6 +208,7 @@ private:
         DFRect bounds{};
         size_t overlayIndex = 0;
         int depth = 0;
+        TabPosition tabPosition = TabPosition::Top;
     };
     std::vector<DropCandidate> dropCandidates_;
     int highlightedCandidateIndex_ = -1;

@@ -239,11 +239,14 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
         const int active = std::clamp(node->activeTab, 0, static_cast<int>(node->children.size()) - 1);
         node->activeTab = active;
 
-        const bool verticalStrip = DockLayout::UseVerticalTabStrip(*node, node->bounds);
+        const TabPosition tabPos = DockLayout::TabStripPosition(*node, node->bounds);
+        const bool verticalStrip = DockLayout::IsVerticalTabPosition(tabPos);
+        const bool stripOnFarSide = (tabPos == TabPosition::Right || tabPos == TabPosition::Bottom);
         const DFRect bar = DockLayout::TabStripRect(*node, node->bounds);
         if (bar.width > 1.0f && bar.height > 1.0f) {
             const float tabFontScale = std::clamp(theme.tabFontScale, 0.3f, 2.0f);
             const float barBottomY = bar.y + bar.height - 1.0f;
+            const float barJoinY = stripOnFarSide ? bar.y : barBottomY;
             // Horizontal tabs should not paint a full strip block behind tabs.
             // Keep strip fill only for vertical mode where it is the sidebar body.
             if (verticalStrip) {
@@ -253,11 +256,16 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
             const DFColor stripLo = ShiftColor(theme.tabStrip, -0.04f);
             if (verticalStrip) {
                 canvas.drawLine({bar.x, bar.y}, {bar.x + bar.width, bar.y}, stripHi, 1.0f);
-                canvas.drawLine({bar.x + bar.width - 1.0f, bar.y}, {bar.x + bar.width - 1.0f, bar.y + bar.height}, theme.tabOutline, 1.0f);
+                const float joinX = (tabPos == TabPosition::Right) ? bar.x : (bar.x + bar.width - 1.0f);
+                canvas.drawLine({joinX, bar.y}, {joinX, bar.y + bar.height}, theme.tabOutline, 1.0f);
                 canvas.drawLine({bar.x, bar.y + bar.height - 1.0f}, {bar.x + bar.width, bar.y + bar.height - 1.0f}, stripLo, 1.0f);
             } else {
-                canvas.drawLine({bar.x, bar.y}, {bar.x + bar.width, bar.y}, stripHi, 1.0f);
-                if (theme.drawSteppedTabShape) {
+                if (stripOnFarSide) {
+                    canvas.drawLine({bar.x, barBottomY}, {bar.x + bar.width, barBottomY}, stripLo, 1.0f);
+                } else {
+                    canvas.drawLine({bar.x, bar.y}, {bar.x + bar.width, bar.y}, stripHi, 1.0f);
+                }
+                if (theme.drawSteppedTabShape && !stripOnFarSide) {
                     // In stepped mode, avoid baseline segments between tabs.
                     // Those tiny segments read as dark rectangles near inactive tabs.
                     const float barRight = bar.x + bar.width;
@@ -273,12 +281,12 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
                         hasTab = true;
                     }
                     if (!hasTab) {
-                        canvas.drawLine({bar.x, barBottomY}, {barRight, barBottomY}, theme.tabOutline, 1.0f);
+                        canvas.drawLine({bar.x, barJoinY}, {barRight, barJoinY}, theme.tabOutline, 1.0f);
                     } else if (lastTabEnd < barRight) {
-                        canvas.drawLine({lastTabEnd, barBottomY}, {barRight, barBottomY}, theme.tabOutline, 1.0f);
+                        canvas.drawLine({lastTabEnd, barJoinY}, {barRight, barJoinY}, theme.tabOutline, 1.0f);
                     }
                 } else {
-                    canvas.drawLine({bar.x, barBottomY}, {bar.x + bar.width, barBottomY}, theme.tabOutline, 1.0f);
+                    canvas.drawLine({bar.x, barJoinY}, {bar.x + bar.width, barJoinY}, theme.tabOutline, 1.0f);
                 }
             }
 
@@ -306,7 +314,7 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
                         theme.tabCornerRadius,
                         theme.drawTabAccent);
                 } else {
-                    if (theme.drawSteppedTabShape) {
+                    if (theme.drawSteppedTabShape && !stripOnFarSide) {
                         DrawHorizontalSteppedTabShape(
                             canvas,
                             tabRect,

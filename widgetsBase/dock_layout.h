@@ -37,38 +37,61 @@ public:
 
         int activeTab = 0;
         float tabBarHeight = 16.0f;
+        TabPosition tabPosition = TabPosition::Top;
+        bool tabPositionExplicit = false;
     };
 
-    static bool UseVerticalTabStrip(const Node& node, const DFRect& bounds)
+    static bool IsVerticalTabPosition(TabPosition pos)
+    {
+        return pos == TabPosition::Left || pos == TabPosition::Right;
+    }
+
+    static TabPosition TabStripPosition(const Node& node, const DFRect& bounds)
     {
         if (node.type != Node::Type::Tab) {
-            return false;
+            return TabPosition::Top;
         }
-        // Keep a single tab-shape language per frame. When stepped tabs are enabled
-        // we intentionally avoid vertical strips because they use a different shape
-        // family and look like duplicate/legacy styling.
-        if (CurrentTheme().drawSteppedTabShape) {
-            return false;
+        if (node.tabPositionExplicit) {
+            return node.tabPosition;
         }
+        // Backward-compatible heuristic for existing layouts that did not set
+        // an explicit tab side.
         if (bounds.width <= 0.0f || bounds.height <= 0.0f) {
-            return false;
+            return TabPosition::Top;
+        }
+        if (CurrentTheme().drawSteppedTabShape) {
+            return TabPosition::Top;
         }
         const float triggerWidth = std::max(96.0f, node.tabBarHeight * 3.4f);
         const bool narrow = bounds.width <= triggerWidth;
         const bool tall = bounds.height >= bounds.width * 1.35f;
-        return narrow && tall;
+        return (narrow && tall) ? TabPosition::Left : TabPosition::Top;
+    }
+
+    static bool UseVerticalTabStrip(const Node& node, const DFRect& bounds)
+    {
+        return IsVerticalTabPosition(TabStripPosition(node, bounds));
     }
 
     static DFRect TabStripRect(const Node& node, const DFRect& bounds)
     {
-        const bool verticalStrip = UseVerticalTabStrip(node, bounds);
+        const TabPosition pos = TabStripPosition(node, bounds);
+        const bool verticalStrip = IsVerticalTabPosition(pos);
         const float barT = std::clamp(
             node.tabBarHeight,
             0.0f,
             std::max(0.0f, verticalStrip ? bounds.width : bounds.height));
-        return verticalStrip
-            ? DFRect{bounds.x, bounds.y, barT, bounds.height}
-            : DFRect{bounds.x, bounds.y, bounds.width, barT};
+        switch (pos) {
+        case TabPosition::Left:
+            return DFRect{bounds.x, bounds.y, barT, bounds.height};
+        case TabPosition::Right:
+            return DFRect{bounds.x + std::max(0.0f, bounds.width - barT), bounds.y, barT, bounds.height};
+        case TabPosition::Bottom:
+            return DFRect{bounds.x, bounds.y + std::max(0.0f, bounds.height - barT), bounds.width, barT};
+        case TabPosition::Top:
+        default:
+            return DFRect{bounds.x, bounds.y, bounds.width, barT};
+        }
     }
 
     static DFRect TabRectForIndex(const Node& node, const DFRect& bounds, size_t index, size_t tabCount)
@@ -229,8 +252,10 @@ private:
                 maxW = defaultMin;
                 maxH = defaultMin;
             }
-            node->calculatedMinWidth = maxW;
-            node->calculatedMinHeight = maxH + barH;
+            const bool verticalTabs = node->tabPositionExplicit &&
+                IsVerticalTabPosition(node->tabPosition);
+            node->calculatedMinWidth = maxW + (verticalTabs ? barH : 0.0f);
+            node->calculatedMinHeight = maxH + (verticalTabs ? 0.0f : barH);
             break;
         }
 
@@ -438,21 +463,44 @@ private:
             if (node->children.empty()) {
                 break;
             }
-            const bool verticalStrip = UseVerticalTabStrip(*node, bounds);
+            const TabPosition pos = TabStripPosition(*node, bounds);
             const DFRect strip = TabStripRect(*node, bounds);
-            const DFRect content = verticalStrip
-                ? DFRect{
+            DFRect content = bounds;
+            switch (pos) {
+            case TabPosition::Left:
+                content = {
                     bounds.x + strip.width,
                     bounds.y,
                     std::max(0.0f, bounds.width - strip.width),
                     bounds.height
-                }
-                : DFRect{
+                };
+                break;
+            case TabPosition::Right:
+                content = {
+                    bounds.x,
+                    bounds.y,
+                    std::max(0.0f, bounds.width - strip.width),
+                    bounds.height
+                };
+                break;
+            case TabPosition::Bottom:
+                content = {
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    std::max(0.0f, bounds.height - strip.height)
+                };
+                break;
+            case TabPosition::Top:
+            default:
+                content = {
                     bounds.x,
                     bounds.y + strip.height,
                     bounds.width,
                     std::max(0.0f, bounds.height - strip.height)
                 };
+                break;
+            }
             const int active = std::clamp(node->activeTab, 0, static_cast<int>(node->children.size()) - 1);
             node->activeTab = active;
             for (size_t i = 0; i < node->children.size(); ++i) {
