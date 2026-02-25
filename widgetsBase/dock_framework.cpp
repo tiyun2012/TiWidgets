@@ -301,6 +301,144 @@ DFRect MakeRightEdgeTabHintRect(const DFRect& stripRect)
     };
 }
 
+bool IsEdgeDropZone(df::DragOverlay::DropZone zone)
+{
+    return zone == df::DragOverlay::DropZone::Left ||
+        zone == df::DragOverlay::DropZone::Right ||
+        zone == df::DragOverlay::DropZone::Top ||
+        zone == df::DragOverlay::DropZone::Bottom;
+}
+
+struct EdgeProximityInfo {
+    df::DragOverlay::DropZone nearestEdge = df::DragOverlay::DropZone::Left;
+    float minDistance = std::numeric_limits<float>::max();
+};
+
+EdgeProximityInfo ComputeEdgeProximity(const DFRect& bounds, const DFPoint& point)
+{
+    const float leftDist = std::abs(point.x - bounds.x);
+    const float rightDist = std::abs((bounds.x + bounds.width) - point.x);
+    const float topDist = std::abs(point.y - bounds.y);
+    const float bottomDist = std::abs((bounds.y + bounds.height) - point.y);
+    const float minDist = std::min(std::min(leftDist, rightDist), std::min(topDist, bottomDist));
+
+    df::DragOverlay::DropZone nearestEdge = df::DragOverlay::DropZone::Left;
+    float nearestDist = leftDist;
+    if (rightDist < nearestDist) {
+        nearestDist = rightDist;
+        nearestEdge = df::DragOverlay::DropZone::Right;
+    }
+    if (topDist < nearestDist) {
+        nearestDist = topDist;
+        nearestEdge = df::DragOverlay::DropZone::Top;
+    }
+    if (bottomDist < nearestDist) {
+        nearestEdge = df::DragOverlay::DropZone::Bottom;
+    }
+    return {nearestEdge, minDist};
+}
+
+DFRect ComputeRootDockContainer(const DFRect& mainContainerBounds, float headerInsetPx, bool fallbackToMainBounds)
+{
+    const float headerInset = std::clamp(
+        headerInsetPx,
+        0.0f,
+        std::max(0.0f, mainContainerBounds.height));
+    const DFRect rootContainer{
+        mainContainerBounds.x,
+        mainContainerBounds.y + headerInset,
+        mainContainerBounds.width,
+        std::max(0.0f, mainContainerBounds.height - headerInset)
+    };
+    if (fallbackToMainBounds &&
+        (rootContainer.width <= 1.0f || rootContainer.height <= 1.0f)) {
+        return mainContainerBounds;
+    }
+    return rootContainer;
+}
+
+DFRect ComputeDraggedFloatingBounds(
+    const DFRect& currentBounds,
+    const DFPoint& mousePos,
+    const DFPoint& dragGrabOffset,
+    const DFRect& workArea)
+{
+    DFRect moved = currentBounds;
+    moved.x = mousePos.x - dragGrabOffset.x;
+    moved.y = mousePos.y - dragGrabOffset.y;
+    if (workArea.width > 0.0f && workArea.height > 0.0f) {
+        if (moved.width > workArea.width) moved.width = workArea.width;
+        if (moved.height > workArea.height) moved.height = workArea.height;
+        const float minX = workArea.x;
+        const float minY = workArea.y;
+        float maxX = workArea.x + workArea.width - moved.width;
+        float maxY = workArea.y + workArea.height - moved.height;
+        if (maxX < minX) maxX = minX;
+        if (maxY < minY) maxY = minY;
+        moved.x = std::clamp(moved.x, minX, maxX);
+        moved.y = std::clamp(moved.y, minY, maxY);
+    }
+    return moved;
+}
+
+int DropCandidatePriority(df::DragOverlay::DropZone zone, int depth, float minDist, float forceRootEdgePriorityDistancePx)
+{
+    if (zone == df::DragOverlay::DropZone::Tab || zone == df::DragOverlay::DropZone::Center) {
+        return 5;
+    }
+    if (IsEdgeDropZone(zone)) {
+        if (depth == 0 && minDist <= forceRootEdgePriorityDistancePx) {
+            // Near the outer frame edge, root docking must beat inner splits.
+            return 6;
+        }
+        // Inner split candidates normally outrank root edge candidates.
+        return (depth > 0) ? 4 : 3;
+    }
+    return 0;
+}
+
+template <typename CandidateT>
+const CandidateT* ResolveBestDropCandidate(
+    const std::vector<CandidateT>& candidates,
+    const DFPoint& mousePos,
+    df::DragOverlay::DropZone nearestEdge,
+    float minDist,
+    float edgeDockActivateDistancePx,
+    float forceRootEdgePriorityDistancePx = 20.0f)
+{
+    const CandidateT* best = nullptr;
+    float bestArea = std::numeric_limits<float>::max();
+    int bestDepth = -1;
+    int bestPriority = -1;
+    for (const auto& candidate : candidates) {
+        // Keep root edge docking explicit (cursor must be inside the thin edge strip).
+        // Near-edge activation stays enabled for inner split targets only.
+        const bool edgeNearAndMatching = candidate.depth > 0 &&
+            IsEdgeDropZone(candidate.zone) &&
+            candidate.zone == nearestEdge &&
+            minDist <= edgeDockActivateDistancePx;
+        if (!candidate.bounds.contains(mousePos) && !edgeNearAndMatching) {
+            continue;
+        }
+        const float area = candidate.bounds.width * candidate.bounds.height;
+        const int priority = DropCandidatePriority(
+            candidate.zone,
+            candidate.depth,
+            minDist,
+            forceRootEdgePriorityDistancePx);
+        if (!best ||
+            priority > bestPriority ||
+            (priority == bestPriority && candidate.depth > bestDepth) ||
+            (priority == bestPriority && candidate.depth == bestDepth && area < bestArea)) {
+            best = &candidate;
+            bestArea = area;
+            bestDepth = candidate.depth;
+            bestPriority = priority;
+        }
+    }
+    return best;
+}
+
 Node* FindBestWidgetNodeAtPoint(Node* node, const DFPoint& point, df::DockWidget* movingWidget, float& bestArea)
 {
     if (!node) {
@@ -1064,22 +1202,11 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
     };
 
     // Keep the actual floating window synced with the cursor during drag.
-    DFRect moved = draggedFloatingWindow_->bounds();
-    moved.x = mousePos.x - dragGrabOffset_.x;
-    moved.y = mousePos.y - dragGrabOffset_.y;
-    const DFRect work = WindowManager::instance().workArea();
-    if (work.width > 0.0f && work.height > 0.0f) {
-        if (moved.width > work.width) moved.width = work.width;
-        if (moved.height > work.height) moved.height = work.height;
-        const float minX = work.x;
-        const float minY = work.y;
-        float maxX = work.x + work.width - moved.width;
-        float maxY = work.y + work.height - moved.height;
-        if (maxX < minX) maxX = minX;
-        if (maxY < minY) maxY = minY;
-        moved.x = std::clamp(moved.x, minX, maxX);
-        moved.y = std::clamp(moved.y, minY, maxY);
-    }
+    const DFRect moved = ComputeDraggedFloatingBounds(
+        draggedFloatingWindow_->bounds(),
+        mousePos,
+        dragGrabOffset_,
+        WindowManager::instance().workArea());
     draggedFloatingWindow_->setBounds(moved);
     overlay_.setPreview({});
 
@@ -1092,16 +1219,7 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
     }
 
     // Root edge docking excludes the header/tool area.
-    const float headerInset = std::clamp(
-        rootDockHeaderInsetPx_,
-        0.0f,
-        std::max(0.0f, mainContainerBounds_.height));
-    const DFRect rootContainer{
-        mainContainerBounds_.x,
-        mainContainerBounds_.y + headerInset,
-        mainContainerBounds_.width,
-        std::max(0.0f, mainContainerBounds_.height - headerInset)
-    };
+    const DFRect rootContainer = ComputeRootDockContainer(mainContainerBounds_, rootDockHeaderInsetPx_, false);
     if (rootContainer.width <= 1.0f || rootContainer.height <= 1.0f) {
         tracePopupHover(nullptr, "invalid_root_container");
         return;
@@ -1195,27 +1313,9 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         dropCandidates_.push_back(entry);
     };
 
-    const float leftDist = std::abs(mousePos.x - rootContainer.x);
-    const float rightDist = std::abs((rootContainer.x + rootContainer.width) - mousePos.x);
-    const float topDist = std::abs(mousePos.y - rootContainer.y);
-    const float bottomDist = std::abs((rootContainer.y + rootContainer.height) - mousePos.y);
-    const float minDist = std::min(std::min(leftDist, rightDist), std::min(topDist, bottomDist));
-
-    DragOverlay::DropZone nearestEdge = DragOverlay::DropZone::Left;
-    float nearestDist = leftDist;
-    if (rightDist < nearestDist) {
-        nearestDist = rightDist;
-        nearestEdge = DragOverlay::DropZone::Right;
-    }
-    if (topDist < nearestDist) {
-        nearestDist = topDist;
-        nearestEdge = DragOverlay::DropZone::Top;
-    }
-    if (bottomDist < nearestDist) {
-        nearestDist = bottomDist;
-        nearestEdge = DragOverlay::DropZone::Bottom;
-    }
-    (void)nearestDist;
+    const EdgeProximityInfo edgeProximity = ComputeEdgeProximity(rootContainer, mousePos);
+    const DragOverlay::DropZone nearestEdge = edgeProximity.nearestEdge;
+    const float minDist = edgeProximity.minDistance;
 
     // Keep edge hints consistent with client-edge language.
     const auto& theme = CurrentTheme();
@@ -1376,51 +1476,12 @@ void DockManager::updateFloatingDrag(const DFPoint& mousePos)
         collectSplitTargets(mainLayout_->root(), 1, false, &rootBoundsSeed);
     }
 
-    auto isEdgeZone = [](DragOverlay::DropZone zone) {
-        return zone == DragOverlay::DropZone::Left ||
-            zone == DragOverlay::DropZone::Right ||
-            zone == DragOverlay::DropZone::Top ||
-            zone == DragOverlay::DropZone::Bottom;
-    };
-    const float forceRootEdgePriorityDistancePx = 20.0f;
-
-    const DropCandidate* hovered = nullptr;
-    float bestArea = std::numeric_limits<float>::max();
-    int bestDepth = -1;
-    int bestPriority = -1;
-    for (const auto& candidate : dropCandidates_) {
-        // Keep root edge docking explicit (cursor must be inside the thin edge strip).
-        // Near-edge activation stays enabled for inner split targets only.
-        const bool edgeNearAndMatching = candidate.depth > 0 &&
-            isEdgeZone(candidate.zone) &&
-            candidate.zone == nearestEdge &&
-            minDist <= edgeDockActivateDistancePx_;
-        if (!candidate.bounds.contains(mousePos) && !edgeNearAndMatching) {
-            continue;
-        }
-        const float area = candidate.bounds.width * candidate.bounds.height;
-        int priority = 0;
-        if (candidate.zone == DragOverlay::DropZone::Tab || candidate.zone == DragOverlay::DropZone::Center) {
-            priority = 5;
-        } else if (isEdgeZone(candidate.zone)) {
-            if (candidate.depth == 0 && minDist <= forceRootEdgePriorityDistancePx) {
-                // Near the outer frame edge, root docking must beat inner splits.
-                priority = 6;
-            } else {
-                // Inner split candidates normally outrank root edge candidates.
-                priority = (candidate.depth > 0) ? 4 : 3;
-            }
-        }
-        if (!hovered ||
-            priority > bestPriority ||
-            (priority == bestPriority && candidate.depth > bestDepth) ||
-            (priority == bestPriority && candidate.depth == bestDepth && area < bestArea)) {
-            hovered = &candidate;
-            bestArea = area;
-            bestDepth = candidate.depth;
-            bestPriority = priority;
-        }
-    }
+    const DropCandidate* hovered = ResolveBestDropCandidate(
+        dropCandidates_,
+        mousePos,
+        nearestEdge,
+        minDist,
+        edgeDockActivateDistancePx_);
     if (hovered) {
         overlay_.highlightZoneIndex(hovered->overlayIndex);
         highlightedCandidateIndex_ = static_cast<int>(hovered->overlayIndex);
@@ -1446,83 +1507,14 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
     // current highlighted target.
     updateFloatingDrag(mousePos);
 
-    const float headerInset = std::clamp(
-        rootDockHeaderInsetPx_,
-        0.0f,
-        std::max(0.0f, mainContainerBounds_.height));
-    DFRect rootContainer{
-        mainContainerBounds_.x,
-        mainContainerBounds_.y + headerInset,
-        mainContainerBounds_.width,
-        std::max(0.0f, mainContainerBounds_.height - headerInset)
-    };
-    if (rootContainer.width <= 1.0f || rootContainer.height <= 1.0f) {
-        rootContainer = mainContainerBounds_;
-    }
-
-    const float leftDist = std::abs(mousePos.x - rootContainer.x);
-    const float rightDist = std::abs((rootContainer.x + rootContainer.width) - mousePos.x);
-    const float topDist = std::abs(mousePos.y - rootContainer.y);
-    const float bottomDist = std::abs((rootContainer.y + rootContainer.height) - mousePos.y);
-    const float minDist = std::min(std::min(leftDist, rightDist), std::min(topDist, bottomDist));
-
-    DragOverlay::DropZone nearestEdge = DragOverlay::DropZone::Left;
-    float nearestDist = leftDist;
-    if (rightDist < nearestDist) {
-        nearestDist = rightDist;
-        nearestEdge = DragOverlay::DropZone::Right;
-    }
-    if (topDist < nearestDist) {
-        nearestDist = topDist;
-        nearestEdge = DragOverlay::DropZone::Top;
-    }
-    if (bottomDist < nearestDist) {
-        nearestEdge = DragOverlay::DropZone::Bottom;
-    }
-    (void)nearestDist;
-
-    auto isEdgeZone = [](DragOverlay::DropZone zone) {
-        return zone == DragOverlay::DropZone::Left ||
-            zone == DragOverlay::DropZone::Right ||
-            zone == DragOverlay::DropZone::Top ||
-            zone == DragOverlay::DropZone::Bottom;
-    };
-    const float forceRootEdgePriorityDistancePx = 20.0f;
-
-    const DropCandidate* candidate = nullptr;
-    float bestArea = std::numeric_limits<float>::max();
-    int bestDepth = -1;
-    int bestPriority = -1;
-    for (const auto& current : dropCandidates_) {
-        // Match updateFloatingDrag: near-edge activation is only for inner split targets.
-        const bool edgeNearAndMatching = current.depth > 0 &&
-            isEdgeZone(current.zone) &&
-            current.zone == nearestEdge &&
-            minDist <= edgeDockActivateDistancePx_;
-        if (!current.bounds.contains(mousePos) && !edgeNearAndMatching) {
-            continue;
-        }
-        const float area = current.bounds.width * current.bounds.height;
-        int priority = 0;
-        if (current.zone == DragOverlay::DropZone::Tab || current.zone == DragOverlay::DropZone::Center) {
-            priority = 5;
-        } else if (isEdgeZone(current.zone)) {
-            if (current.depth == 0 && minDist <= forceRootEdgePriorityDistancePx) {
-                priority = 6;
-            } else {
-                priority = (current.depth > 0) ? 4 : 3;
-            }
-        }
-        if (!candidate ||
-            priority > bestPriority ||
-            (priority == bestPriority && current.depth > bestDepth) ||
-            (priority == bestPriority && current.depth == bestDepth && area < bestArea)) {
-            candidate = &current;
-            bestArea = area;
-            bestDepth = current.depth;
-            bestPriority = priority;
-        }
-    }
+    const DFRect rootContainer = ComputeRootDockContainer(mainContainerBounds_, rootDockHeaderInsetPx_, true);
+    const EdgeProximityInfo edgeProximity = ComputeEdgeProximity(rootContainer, mousePos);
+    const DropCandidate* candidate = ResolveBestDropCandidate(
+        dropCandidates_,
+        mousePos,
+        edgeProximity.nearestEdge,
+        edgeProximity.minDistance,
+        edgeDockActivateDistancePx_);
 
     // Strict tab docking: only allow tabify when mouse-up is inside
     // the tab highlight rectangle.
@@ -1545,23 +1537,11 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
             widget->title().c_str(),
             mousePos.x,
             mousePos.y);
-        DFRect moved = sourceWindow->bounds();
-        moved.x = mousePos.x - dragGrabOffset_.x;
-        moved.y = mousePos.y - dragGrabOffset_.y;
-        const DFRect work = WindowManager::instance().workArea();
-        if (work.width > 0.0f && work.height > 0.0f) {
-            if (moved.width > work.width) moved.width = work.width;
-            if (moved.height > work.height) moved.height = work.height;
-            const float minX = work.x;
-            const float minY = work.y;
-            float maxX = work.x + work.width - moved.width;
-            float maxY = work.y + work.height - moved.height;
-            if (maxX < minX) maxX = minX;
-            if (maxY < minY) maxY = minY;
-            moved.x = std::clamp(moved.x, minX, maxX);
-            moved.y = std::clamp(moved.y, minY, maxY);
-        }
-        sourceWindow->setBounds(moved);
+        sourceWindow->setBounds(ComputeDraggedFloatingBounds(
+            sourceWindow->bounds(),
+            mousePos,
+            dragGrabOffset_,
+            WindowManager::instance().workArea()));
         cancelFloatingDrag();
         return;
     }
@@ -1631,23 +1611,11 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
                 widget->title().c_str(),
                 mousePos.x,
                 mousePos.y);
-            DFRect moved = sourceWindow->bounds();
-            moved.x = mousePos.x - dragGrabOffset_.x;
-            moved.y = mousePos.y - dragGrabOffset_.y;
-            const DFRect work = WindowManager::instance().workArea();
-            if (work.width > 0.0f && work.height > 0.0f) {
-                if (moved.width > work.width) moved.width = work.width;
-                if (moved.height > work.height) moved.height = work.height;
-                const float minX = work.x;
-                const float minY = work.y;
-                float maxX = work.x + work.width - moved.width;
-                float maxY = work.y + work.height - moved.height;
-                if (maxX < minX) maxX = minX;
-                if (maxY < minY) maxY = minY;
-                moved.x = std::clamp(moved.x, minX, maxX);
-                moved.y = std::clamp(moved.y, minY, maxY);
-            }
-            sourceWindow->setBounds(moved);
+            sourceWindow->setBounds(ComputeDraggedFloatingBounds(
+                sourceWindow->bounds(),
+                mousePos,
+                dragGrabOffset_,
+                WindowManager::instance().workArea()));
             cancelFloatingDrag();
             return;
         }
@@ -1659,23 +1627,11 @@ void DockManager::endFloatingDrag(const DFPoint& mousePos)
             widget->title().c_str(),
             mousePos.x,
             mousePos.y);
-        DFRect moved = sourceWindow->bounds();
-        moved.x = mousePos.x - dragGrabOffset_.x;
-        moved.y = mousePos.y - dragGrabOffset_.y;
-        const DFRect work = WindowManager::instance().workArea();
-        if (work.width > 0.0f && work.height > 0.0f) {
-            if (moved.width > work.width) moved.width = work.width;
-            if (moved.height > work.height) moved.height = work.height;
-            const float minX = work.x;
-            const float minY = work.y;
-            float maxX = work.x + work.width - moved.width;
-            float maxY = work.y + work.height - moved.height;
-            if (maxX < minX) maxX = minX;
-            if (maxY < minY) maxY = minY;
-            moved.x = std::clamp(moved.x, minX, maxX);
-            moved.y = std::clamp(moved.y, minY, maxY);
-        }
-        sourceWindow->setBounds(moved);
+        sourceWindow->setBounds(ComputeDraggedFloatingBounds(
+            sourceWindow->bounds(),
+            mousePos,
+            dragGrabOffset_,
+            WindowManager::instance().workArea()));
         cancelFloatingDrag();
         return;
     }
