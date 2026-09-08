@@ -2,6 +2,11 @@
 
 This guide lists practical breakpoint sets for the current docking code so developers can follow behavior end-to-end.
 
+For the modern workspace, use the symbol-based checkpoints and repeatable
+milestone command in [UI_MILESTONES.md](UI_MILESTONES.md). The line numbers in
+the older packs below are historical; locate the named functions in the current
+source instead of relying on those numbers.
+
 ## Prerequisites
 
 - Build Debug config:

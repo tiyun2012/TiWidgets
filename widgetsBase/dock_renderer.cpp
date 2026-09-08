@@ -48,29 +48,50 @@ const df::DockWidget* ResolveWidgetForLabel(const df::DockLayout::Node* node)
     return ResolveWidgetForLabel(node->second.get());
 }
 
-void DrawHorizontalTabShape(
-    Canvas& canvas,
-    const DFRect& tabRect,
-    const DFColor& fill,
-    const DFColor& outline,
-    bool active,
-    const DFColor& accent,
-    float cornerRadius,
-    bool drawAccent)
+// Round only the corners away from the workspace. The open side continues
+// through the body's one-pixel border so the active tab and body share a surface.
+void DrawConnectedTabShape(Canvas& canvas, DFRect rect, const DFRect& strip,
+    const DFColor& fill, const DFColor& outline, bool active,
+    df::TabPosition side, float radius)
 {
-    if (tabRect.width <= 2.0f || tabRect.height <= 2.0f) {
-        return;
+    if (rect.width <= 2 || rect.height <= 2) return;
+    rect.x = std::round(rect.x);
+    rect.y = std::round(rect.y);
+    rect.width = std::round(rect.width);
+    rect.height = std::round(rect.height);
+    if (active) {
+        switch (side) {
+        case df::TabPosition::Top: rect.height = strip.y + strip.height + 1 - rect.y; break;
+        case df::TabPosition::Bottom: rect.height += rect.y - strip.y + 1; rect.y = strip.y - 1; break;
+        case df::TabPosition::Left: rect.width = strip.x + strip.width + 1 - rect.x; break;
+        case df::TabPosition::Right: rect.width += rect.x - strip.x + 1; rect.x = strip.x - 1; break;
+        }
     }
-
-    const float radius = std::max(0.0f, std::min(cornerRadius, std::min(tabRect.width, tabRect.height) * 0.48f));
-    canvas.drawRoundedRectangle(tabRect, radius, fill);
-    canvas.drawRoundedRectangleOutline(tabRect, radius, outline, 1.0f);
-
-    if (active && drawAccent) {
-        const float accentX = tabRect.x + 1.0f;
-        const float accentW = std::max(0.0f, tabRect.width - 2.0f);
-        canvas.drawRectangle({accentX, tabRect.y + 1.0f, accentW, 2.0f}, accent);
+    auto shape = [&](const DFRect& r, float corner, const DFColor& color) {
+        canvas.drawRoundedRectangle(r, corner, color);
+        if (!active) return;
+        switch (side) {
+        case df::TabPosition::Top:
+            canvas.drawRectangle({r.x, r.y + r.height * 0.5f, r.width, r.height * 0.5f}, color); break;
+        case df::TabPosition::Bottom:
+            canvas.drawRectangle({r.x, r.y, r.width, r.height * 0.5f}, color); break;
+        case df::TabPosition::Left:
+            canvas.drawRectangle({r.x + r.width * 0.5f, r.y, r.width * 0.5f, r.height}, color); break;
+        case df::TabPosition::Right:
+            canvas.drawRectangle({r.x, r.y, r.width * 0.5f, r.height}, color); break;
+        }
+    };
+    shape(rect, radius, outline);
+    DFRect inner{rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2};
+    if (active) {
+        switch (side) {
+        case df::TabPosition::Top: inner.height += 1; break;
+        case df::TabPosition::Bottom: inner.y -= 1; inner.height += 1; break;
+        case df::TabPosition::Left: inner.width += 1; break;
+        case df::TabPosition::Right: inner.x -= 1; inner.width += 1; break;
+        }
     }
+    shape(inner, std::max(0.0f, radius - 1), fill);
 }
 
 void DrawHorizontalSteppedTabShape(
@@ -117,31 +138,6 @@ void DrawHorizontalSteppedTabShape(
     canvas.drawLine({left, bottomY}, {leftTopX, topY}, outline, 1.0f);
     canvas.drawLine({leftTopX, topY}, {rightTopX, topY}, outline, 1.0f);
     canvas.drawLine({rightTopX, topY}, {right, bottomY}, outline, 1.0f);
-}
-
-void DrawVerticalTabShape(
-    Canvas& canvas,
-    const DFRect& tabRect,
-    const DFColor& fill,
-    const DFColor& outline,
-    bool active,
-    const DFColor& accent,
-    float cornerRadius,
-    bool drawAccent)
-{
-    if (tabRect.width <= 2.0f || tabRect.height <= 2.0f) {
-        return;
-    }
-
-    const float radius = std::max(0.0f, std::min(cornerRadius, std::min(tabRect.width, tabRect.height) * 0.48f));
-    canvas.drawRoundedRectangle(tabRect, radius, fill);
-    canvas.drawRoundedRectangleOutline(tabRect, radius, outline, 1.0f);
-
-    if (active && drawAccent) {
-        const float accentY = tabRect.y + 1.0f;
-        const float accentH = std::max(0.0f, tabRect.height - 2.0f);
-        canvas.drawRectangle({tabRect.x + tabRect.width - 3.0f, accentY, 2.0f, accentH}, accent);
-    }
 }
 
 void DrawVerticalLabel(
@@ -239,6 +235,10 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
         const int active = std::clamp(node->activeTab, 0, static_cast<int>(node->children.size()) - 1);
         node->activeTab = active;
 
+        if (active >= 0 && active < static_cast<int>(node->children.size())) {
+            renderNode(canvas, node->children[static_cast<size_t>(active)].get(), theme);
+        }
+
         const TabPosition tabPos = DockLayout::TabStripPosition(*node, node->bounds);
         const bool verticalStrip = DockLayout::IsVerticalTabPosition(tabPos);
         const bool stripOnFarSide = (tabPos == TabPosition::Right || tabPos == TabPosition::Bottom);
@@ -246,49 +246,7 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
         if (bar.width > 1.0f && bar.height > 1.0f) {
             const float tabFontScale = std::clamp(theme.tabFontScale, 0.3f, 2.0f);
             const float barBottomY = bar.y + bar.height - 1.0f;
-            const float barJoinY = stripOnFarSide ? bar.y : barBottomY;
-            // Horizontal tabs should not paint a full strip block behind tabs.
-            // Keep strip fill only for vertical mode where it is the sidebar body.
-            if (verticalStrip) {
-                canvas.drawRectangle(bar, theme.tabStrip);
-            }
-            const DFColor stripHi = ShiftColor(theme.tabStrip, 0.05f);
-            const DFColor stripLo = ShiftColor(theme.tabStrip, -0.04f);
-            if (verticalStrip) {
-                canvas.drawLine({bar.x, bar.y}, {bar.x + bar.width, bar.y}, stripHi, 1.0f);
-                const float joinX = (tabPos == TabPosition::Right) ? bar.x : (bar.x + bar.width - 1.0f);
-                canvas.drawLine({joinX, bar.y}, {joinX, bar.y + bar.height}, theme.tabOutline, 1.0f);
-                canvas.drawLine({bar.x, bar.y + bar.height - 1.0f}, {bar.x + bar.width, bar.y + bar.height - 1.0f}, stripLo, 1.0f);
-            } else {
-                if (stripOnFarSide) {
-                    canvas.drawLine({bar.x, barBottomY}, {bar.x + bar.width, barBottomY}, stripLo, 1.0f);
-                } else {
-                    canvas.drawLine({bar.x, bar.y}, {bar.x + bar.width, bar.y}, stripHi, 1.0f);
-                }
-                if (theme.drawSteppedTabShape && !stripOnFarSide) {
-                    // In stepped mode, avoid baseline segments between tabs.
-                    // Those tiny segments read as dark rectangles near inactive tabs.
-                    const float barRight = bar.x + bar.width;
-                    float lastTabEnd = bar.x;
-                    bool hasTab = false;
-                    for (size_t i = 0; i < node->children.size(); ++i) {
-                        const DFRect tabRect = DockLayout::TabRectForIndex(*node, node->bounds, i, node->children.size());
-                        if (tabRect.width <= 1.0f) {
-                            continue;
-                        }
-                        const float cutEnd = std::clamp(tabRect.x + tabRect.width, bar.x, barRight);
-                        lastTabEnd = std::max(lastTabEnd, cutEnd);
-                        hasTab = true;
-                    }
-                    if (!hasTab) {
-                        canvas.drawLine({bar.x, barJoinY}, {barRight, barJoinY}, theme.tabOutline, 1.0f);
-                    } else if (lastTabEnd < barRight) {
-                        canvas.drawLine({lastTabEnd, barJoinY}, {barRight, barJoinY}, theme.tabOutline, 1.0f);
-                    }
-                } else {
-                    canvas.drawLine({bar.x, barJoinY}, {bar.x + bar.width, barJoinY}, theme.tabOutline, 1.0f);
-                }
-            }
+            canvas.drawRectangle(bar, theme.tabStrip);
 
             for (size_t i = 0; i < node->children.size(); ++i) {
                 DFRect tabRect = DockLayout::TabRectForIndex(*node, node->bounds, i, node->children.size());
@@ -303,37 +261,21 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
                     tabBg = ShiftColor(tabBg, 0.06f);
                 }
 
-                if (verticalStrip) {
-                    DrawVerticalTabShape(
-                        canvas,
-                        tabRect,
-                        tabBg,
-                        theme.tabOutline,
-                        isActive,
-                        theme.tabAccent,
-                        theme.tabCornerRadius,
-                        theme.drawTabAccent);
+                if (theme.drawSteppedTabShape && !verticalStrip && !stripOnFarSide) {
+                    DrawHorizontalSteppedTabShape(canvas, tabRect, tabBg, theme.tabOutline,
+                        isActive, barBottomY, theme.tabShoulderWidth, theme.tabLiftPx);
                 } else {
-                    if (theme.drawSteppedTabShape && !stripOnFarSide) {
-                        DrawHorizontalSteppedTabShape(
-                            canvas,
-                            tabRect,
-                            tabBg,
-                            theme.tabOutline,
-                            isActive,
-                            barBottomY,
-                            theme.tabShoulderWidth,
-                            theme.tabLiftPx);
+                    DrawConnectedTabShape(canvas, tabRect, bar, tabBg, theme.tabOutline,
+                        isActive, tabPos, theme.tabCornerRadius);
+                }
+                // Optional custom-theme accent; the default uses only the shared outline.
+                if (isActive && theme.drawTabAccent) {
+                    if (verticalStrip) {
+                        const float x = tabPos == TabPosition::Left ? tabRect.x + 1 : tabRect.x + tabRect.width - 3;
+                        canvas.drawRectangle({x, tabRect.y + 4, 2, std::max(0.0f, tabRect.height - 8)}, theme.tabAccent);
                     } else {
-                        DrawHorizontalTabShape(
-                            canvas,
-                            tabRect,
-                            tabBg,
-                            theme.tabOutline,
-                            isActive,
-                            theme.tabAccent,
-                            theme.tabCornerRadius,
-                            theme.drawTabAccent);
+                        const float y = tabPos == TabPosition::Top ? tabRect.y + 1 : tabRect.y + tabRect.height - 3;
+                        canvas.drawRectangle({tabRect.x + 4, y, std::max(0.0f, tabRect.width - 8), 2}, theme.tabAccent);
                     }
                 }
 
@@ -350,18 +292,23 @@ void DockRenderer::renderNode(Canvas& canvas, DockLayout::Node* node, const Dock
                 } else {
                     const float textLeft = tabRect.x + 9.0f;
                     const float textTop = DFTextBaselineYForRect(tabRect, tabFontScale);
-                    const float textMax = std::max(0.0f, tabRect.width - 16.0f);
+                    const float textMax = std::max(0.0f, tabCloseRect(tabRect).x - textLeft - 6.0f);
                     const std::string clipped = ClipTextForWidth(label, textMax, true, tabFontScale);
                     if (!clipped.empty()) {
                         DFDrawText(canvas, textLeft, textTop, clipped, textColor, tabFontScale, theme.smoothFont);
+                    }
+                    if (theme.drawTitleBarIcons && tabRect.width >= 52.0f) {
+                        const DFRect close = tabCloseRect(tabRect);
+                        DockIconButtonStyle style;
+                        style.iconBase = theme.mutedText;
+                        style.iconHover = theme.tabAccent;
+                        DrawDockIconButton(canvas, DockIcon::Close, close, tabBg,
+                            hasMousePos_ && close.contains(mousePos_), style);
                     }
                 }
             }
         }
 
-        if (active >= 0 && active < static_cast<int>(node->children.size())) {
-            renderNode(canvas, node->children[static_cast<size_t>(active)].get(), theme);
-        }
         return;
     }
 

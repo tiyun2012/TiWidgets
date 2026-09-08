@@ -367,6 +367,13 @@ public:
     {
         DFDrawText(*this, x, y, text, color, 1.0f, DFTextSmooth());
     }
+    virtual void drawTextScaled(float x, float y, const std::string& text, const DFColor& color, float scale, bool smooth)
+    {
+        DFDrawBitmapTextPixels(x, y, text, [&](float px, float py, float w, float h) {
+            if (smooth) drawRoundedRectangle({px, py, w, h}, std::max(0.2f, w * 0.35f), color);
+            else drawRectangle({px, py, w, h}, color);
+        }, scale);
+    }
 };
 
 inline void DFDrawText(Canvas& canvas,
@@ -377,20 +384,7 @@ inline void DFDrawText(Canvas& canvas,
                        float scaleMul,
                        bool smooth)
 {
-    DFDrawBitmapTextPixels(
-        x,
-        y,
-        text,
-        [&](float px, float py, float w, float h) {
-            if (!smooth) {
-                canvas.drawRectangle({px, py, w, h}, color);
-                return;
-            }
-            // Soft mode: rounded glyph pixels reduce blocky appearance.
-            const float radius = std::max(0.2f, w * 0.35f);
-            canvas.drawRoundedRectangle({px, py, w, h}, radius, color);
-        },
-        scaleMul);
+    canvas.drawTextScaled(x, y, text, color, scaleMul, smooth);
 }
 
 class Widget {

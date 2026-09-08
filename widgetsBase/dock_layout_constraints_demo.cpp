@@ -121,12 +121,14 @@ int main()
     layout.update(wideBounds);
 
     // Tab containers reserve a single content view plus shared tab strip.
-    checks.expectNear(rootNode->calculatedMinWidth, 828.0f, 0.6f, "root min width");
-    checks.expectNear(rootNode->calculatedMinHeight, 816.0f, 0.6f, "root min height");
+    const float gap = df::DockLayout::SplitterGapPx();
+    const float tabHeight = df::DockLayout::ThemeTabBarHeight();
+    checks.expectNear(rootNode->calculatedMinWidth, 820.0f + 2 * gap, 0.6f, "root min width");
+    checks.expectNear(rootNode->calculatedMinHeight, 480.0f + 2 * tabHeight + gap, 0.6f, "root min height");
     checks.expectNear(rootNode->minFirstSize, 260.0f, 0.6f, "root min first");
-    checks.expectNear(rootNode->minSecondSize, 564.0f, 0.6f, "root min second");
-    checks.expectNear(rightNode->minFirstSize, 588.0f, 0.6f, "right split min first");
-    checks.expectNear(rightNode->minSecondSize, 224.0f, 0.6f, "right split min second");
+    checks.expectNear(rootNode->minSecondSize, 560.0f + gap, 0.6f, "root min second");
+    checks.expectNear(rightNode->minFirstSize, 280.0f + tabHeight, 0.6f, "right split min first");
+    checks.expectNear(rightNode->minSecondSize, 200.0f + tabHeight, 0.6f, "right split min second");
     checks.expectNear(bottomNode->minFirstSize, 300.0f, 0.6f, "bottom split min first");
     checks.expectNear(bottomNode->minSecondSize, 260.0f, 0.6f, "bottom split min second");
 
@@ -174,7 +176,7 @@ int main()
         splitters.updateDrag({wideBounds.x + wideBounds.width + 500.0f, rootGrab.y});
         splitters.endDrag();
         layout.update(wideBounds);
-        const float expectedMaxFirst = wideBounds.width - rootNode->minSecondSize;
+        const float expectedMaxFirst = wideBounds.width - gap - rootNode->minSecondSize;
         checks.expectNear(rootNode->first->bounds.width, expectedMaxFirst, 0.6f, "drag clamps to maxFirst");
     }
 
@@ -182,21 +184,21 @@ int main()
     const DFRect compactBounds{0.0f, 0.0f, 700.0f, 760.0f};
     layout.update(compactBounds);
     const float minSum = rootNode->minFirstSize + rootNode->minSecondSize;
-    const float compressedLeft = (minSum > 0.0f) ? (compactBounds.width * (rootNode->minFirstSize / minSum)) : 0.0f;
+    const float compressedLeft = (minSum > 0.0f) ? ((compactBounds.width - gap) * (rootNode->minFirstSize / minSum)) : 0.0f;
     checks.expectNear(rootNode->first->bounds.width, compressedLeft, 1.0f, "compressed left proportional");
     checks.expectNear(
         rootNode->second->bounds.width,
-        compactBounds.width - compressedLeft,
+        compactBounds.width - gap - compressedLeft,
         1.0f,
         "compressed right proportional");
 
-    // Stacked tab containers keep both children visible and sum vertical requirements.
+    // Tabs reserve the largest child's minimum and display only the selected child.
     topTabsNode->activeTab = 1;
     layout.update(wideBounds);
     checks.expectNear(topTabsNode->calculatedMinWidth, 480.0f, 0.6f, "tab min width uses largest child");
-    checks.expectNear(topTabsNode->calculatedMinHeight, 588.0f, 0.6f, "tab min height stacks children");
-    checks.expect(viewportLeafNode->bounds.width > 1.0f, "first stacked child visible");
-    checks.expect(sceneLeafNode->bounds.width > 1.0f, "second stacked child visible");
+    checks.expectNear(topTabsNode->calculatedMinHeight, 280.0f + tabHeight, 0.6f, "tab min height uses largest child plus strip");
+    checks.expect(viewportLeafNode->bounds.width == 0.0f && viewportLeafNode->bounds.height == 0.0f, "inactive child collapsed");
+    checks.expect(sceneLeafNode->bounds.width > 1.0f, "selected child visible");
 
     if (checks.failed() > 0) {
         std::cout << "CHECKS FAILED passed=" << checks.passed() << " failed=" << checks.failed() << "\n";

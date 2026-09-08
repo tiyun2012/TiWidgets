@@ -59,6 +59,27 @@ if (BUILD_TESTING)
     endif()
 
     if (TARGET dx12_demo)
+        add_test(NAME dx12_native_repaint
+            COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=native_repaint
+                DF_NATIVE_FLOAT_HOSTS=1 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+        set_tests_properties(dx12_native_repaint PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
+        add_test(NAME dx12_event_mixed
+            COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=mixed
+                DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+        set_tests_properties(dx12_event_mixed PROPERTIES TIMEOUT 30)
+        foreach(ui_theme dark light slate)
+            add_test(NAME dx12_workspace_${ui_theme}
+                COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace
+                    DF_THEME=${ui_theme} DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+            set_tests_properties(dx12_workspace_${ui_theme} PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
+        endforeach()
+        add_test(NAME dx12_workspace_native
+            COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace
+                DF_NATIVE_FLOAT_HOSTS=1 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+        add_test(NAME dx12_workspace_batch_render
+            COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace
+                DF_CANVAS_BATCH_STRESS=1 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+        set_tests_properties(dx12_workspace_native dx12_workspace_batch_render PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
         add_test(
             NAME dx12_event_automation
             COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>
@@ -113,4 +134,12 @@ if (BUILD_TESTING)
         )
         set_tests_properties(dx12_event_host_transfer_stress PROPERTIES TIMEOUT 30)
     endif()
+
+    # Per-test working directories prevent interleaved append-only event logs,
+    # including when a developer invokes ctest --parallel.
+    get_property(wb_tests DIRECTORY PROPERTY TESTS)
+    foreach(wb_test IN LISTS wb_tests)
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-artifacts/${wb_test}")
+        set_tests_properties(${wb_test} PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/test-artifacts/${wb_test}")
+    endforeach()
 endif()

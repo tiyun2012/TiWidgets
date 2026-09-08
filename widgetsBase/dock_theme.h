@@ -10,47 +10,49 @@ namespace df {
 
 struct DockTheme {
     // Single title-bar color used everywhere (docked + floating).
-    DFColor titleBar{DFColorFromHex(0x2D2D30)};
-    DFColor dockBackground{DFColorFromHex(0x37353E)};
-    DFColor dockBorder{0.40f, 0.40f, 0.45f, 1.0f};
+    DFColor titleBar{DFColorFromHex(0x252B34)};
+    DFColor dockBackground{DFColorFromHex(0x20242B)};
+    DFColor dockBorder{DFColorFromHex(0x3C434D)};
 
-    DFColor floatingFrame{DFColorFromHex(0x37353E)};
-    DFColor floatingCloseButton{DFColorFromHex(0x2D2D30)};
+    DFColor floatingFrame{DFColorFromHex(0x252B34)};
+    DFColor floatingCloseButton{DFColorFromHex(0x20242B)};
 
-    DFColor tabStrip{DFColorFromHex(0x3A3A3E)};
-    DFColor tabActive{DFColorFromHex(0x414148)};
-    DFColor tabInactive{DFColorFromHex(0x323238)};
-    DFColor tabOutline{DFColorFromHex(0x202024)};
-    DFColor tabAccent{DFColorFromHex(0xC48A3D)};
-    DFColor tabTextActive{DFColorFromHex(0xE6E6EA)};
-    DFColor tabTextInactive{DFColorFromHex(0xA2A2AA)};
-    float tabBarHeight = 16.0f;
+    DFColor tabStrip{DFColorFromHex(0x20242B)};
+    DFColor tabActive{DFColorFromHex(0x252B34)};
+    DFColor tabInactive{DFColorFromHex(0x20242B)};
+    DFColor tabOutline{DFColorFromHex(0x3C434D)};
+    DFColor tabAccent{DFColorFromHex(0x68B5FF)};
+    DFColor tabTextActive{DFColorFromHex(0xEDF2F7)};
+    DFColor tabTextInactive{DFColorFromHex(0xA6B2C2)};
+    float tabBarHeight = 32.0f;
     float tabCornerRadius = 4.0f;
     float tabShoulderWidth = 6.0f;
     float tabLiftPx = 4.0f;
-    float tabFontScale = 0.5f;
-    // Use an even pixel scale so half-size tab text stays crisp (0.5 * 2.0 = 1px glyph pixels).
-    float fontPixelScale = 2.0f;
+    float tabFontScale = 0.9f;
+    // Base text metrics shared by the native atlas and portable bitmap fallback.
+    float fontPixelScale = 1.4f;
     bool smoothFont = true;
 
-    DFColor splitter{0.50f, 0.50f, 0.50f, 1.0f};
-    DFColor splitterHover{0.75f, 0.75f, 0.82f, 1.0f};
-    DFColor splitterDrag{0.30f, 0.60f, 1.00f, 1.0f};
+    DFColor splitter{DFColorFromHex(0x3C434D)};
+    DFColor splitterHandle{DFColorFromHex(0x69717C)};
+    DFColor splitterHover{DFColorFromHex(0x818A96)};
+    DFColor splitterDrag{DFColorFromHex(0xA2ACB9)};
+    float splitterHandleScale = 1.1f;
 
     DFColor overlayPanel{0.06f, 0.06f, 0.09f, 0.85f};
     DFColor overlayAccent{0.30f, 0.78f, 1.00f, 0.95f};
     DFColor overlayAccentSoft{0.15f, 0.55f, 0.85f, 0.20f};
 
-    DFColor clientAreaFill{DFColorFromHex(0x413E49)};
-    DFColor clientAreaBorder{DFColorFromHex(0x5C3E94)};
+    DFColor clientAreaFill{DFColorFromHex(0x252B34)};
+    DFColor clientAreaBorder{DFColorFromHex(0x3C434D)};
     float clientAreaPadding = 2.0f;
-    float tabClientAreaExtraPadding = 1.5f;
-    float clientAreaCornerRadius = 3.333f;
-    float clientAreaBorderThickness = 0.75f;
+    float tabClientAreaExtraPadding = 0.0f;
+    float clientAreaCornerRadius = 3.0f;
+    float clientAreaBorderThickness = 1.0f;
 
     // Shared visual feature toggles for quality/performance tuning.
     bool drawClientArea = true;
-    bool drawClientAreaBorder = true;
+    bool drawClientAreaBorder = false;
     bool drawRoundedClientArea = true;
     bool drawSplitter = true;
     bool drawSplitterStateColors = true;
@@ -59,7 +61,12 @@ struct DockTheme {
     bool drawUndockIcon = false;
     bool drawWidgetHoverOutline = false;
     bool drawTabAccent = false;
-    bool drawSteppedTabShape = true;
+    bool drawSteppedTabShape = false;
+    DFColor text{DFColorFromHex(0xEDF2F7)};
+    DFColor mutedText{DFColorFromHex(0xA6B2C2)};
+    DFColor controlFill{DFColorFromHex(0x303946)};
+    DFColor selection{DFColorFromHex(0x234C70)};
+    DFColor success{DFColorFromHex(0x66D6AD)};
 };
 
 inline DockTheme MakeDarkTheme()
@@ -70,47 +77,56 @@ inline DockTheme MakeDarkTheme()
 inline DockTheme MakeLightTheme()
 {
     DockTheme theme{};
-    theme.titleBar = DFColorFromHex(0x2D2D30);
-    theme.dockBackground = DFColorFromHex(0x37353E);
-    theme.dockBorder = {0.66f, 0.68f, 0.72f, 1.0f};
-    theme.floatingFrame = DFColorFromHex(0x37353E);
-    theme.floatingCloseButton = DFColorFromHex(0x2D2D30);
-    theme.tabStrip = {0.84f, 0.86f, 0.89f, 1.0f};
-    theme.tabActive = {0.62f, 0.72f, 0.92f, 1.0f};
-    theme.tabInactive = {0.75f, 0.77f, 0.82f, 1.0f};
-    theme.tabOutline = {0.55f, 0.58f, 0.64f, 1.0f};
-    theme.tabAccent = {0.77f, 0.48f, 0.18f, 1.0f};
-    theme.tabTextActive = {0.08f, 0.09f, 0.10f, 1.0f};
-    theme.tabTextInactive = {0.16f, 0.17f, 0.20f, 1.0f};
-    theme.splitter = {0.58f, 0.60f, 0.64f, 1.0f};
-    theme.splitterHover = {0.36f, 0.60f, 0.94f, 1.0f};
+    theme.titleBar = DFColorFromHex(0xFFFFFF);
+    theme.dockBackground = DFColorFromHex(0xEDF1F6);
+    theme.dockBorder = DFColorFromHex(0xBDC3CB);
+    theme.floatingFrame = DFColorFromHex(0xFFFFFF);
+    theme.floatingCloseButton = theme.titleBar;
+    theme.tabStrip = theme.dockBackground;
+    theme.tabActive = theme.floatingFrame;
+    theme.tabInactive = theme.tabStrip;
+    theme.tabOutline = theme.dockBorder;
+    theme.tabAccent = DFColorFromHex(0x176FC1);
+    theme.text = DFColorFromHex(0x202D3E);
+    theme.mutedText = DFColorFromHex(0x53647B);
+    theme.tabTextActive = theme.text;
+    theme.tabTextInactive = theme.mutedText;
+    theme.splitter = theme.dockBorder;
+    theme.splitterHandle = DFColorFromHex(0x89939E);
+    theme.splitterHover = DFColorFromHex(0x687582);
+    theme.splitterDrag = DFColorFromHex(0x4B5865);
     theme.overlayPanel = {0.94f, 0.95f, 0.97f, 0.90f};
-    theme.overlayAccent = {0.20f, 0.52f, 0.92f, 0.95f};
+    theme.overlayAccent = theme.tabAccent;
     theme.overlayAccentSoft = {0.16f, 0.47f, 0.85f, 0.26f};
+    theme.clientAreaFill = theme.floatingFrame;
+    theme.clientAreaBorder = theme.dockBorder;
+    theme.controlFill = DFColorFromHex(0xDDE5EF);
+    theme.selection = DFColorFromHex(0xD6E9FC);
+    theme.success = DFColorFromHex(0x147657);
     return theme;
 }
 
 inline DockTheme MakeSlateTheme()
 {
     DockTheme theme{};
-    theme.titleBar = DFColorFromHex(0x2D2D30);
-    theme.dockBackground = DFColorFromHex(0x37353E);
-    theme.dockBorder = {0.34f, 0.41f, 0.46f, 1.0f};
-    theme.floatingFrame = DFColorFromHex(0x37353E);
-    theme.floatingCloseButton = DFColorFromHex(0x2D2D30);
-    theme.tabStrip = {0.16f, 0.20f, 0.23f, 1.0f};
-    theme.tabActive = {0.24f, 0.41f, 0.54f, 1.0f};
-    theme.tabInactive = {0.18f, 0.25f, 0.29f, 1.0f};
-    theme.tabOutline = {0.10f, 0.14f, 0.17f, 1.0f};
-    theme.tabAccent = {0.88f, 0.64f, 0.23f, 1.0f};
-    theme.tabTextActive = {0.92f, 0.95f, 0.97f, 1.0f};
-    theme.tabTextInactive = {0.73f, 0.80f, 0.84f, 1.0f};
-    theme.splitter = {0.31f, 0.39f, 0.43f, 1.0f};
-    theme.splitterHover = {0.47f, 0.67f, 0.78f, 1.0f};
-    theme.splitterDrag = {0.34f, 0.78f, 0.97f, 1.0f};
-    theme.overlayPanel = {0.08f, 0.11f, 0.14f, 0.88f};
-    theme.overlayAccent = {0.34f, 0.78f, 0.97f, 0.95f};
-    theme.overlayAccentSoft = {0.20f, 0.61f, 0.78f, 0.24f};
+    theme.titleBar = DFColorFromHex(0x283640);
+    theme.dockBackground = DFColorFromHex(0x202C36);
+    theme.dockBorder = DFColorFromHex(0x495862);
+    theme.floatingFrame = DFColorFromHex(0x283640);
+    theme.floatingCloseButton = theme.titleBar;
+    theme.tabStrip = theme.dockBackground;
+    theme.tabActive = theme.floatingFrame;
+    theme.tabInactive = theme.tabStrip;
+    theme.tabOutline = theme.dockBorder;
+    theme.tabAccent = DFColorFromHex(0x7DC9CC);
+    theme.splitter = theme.dockBorder;
+    theme.splitterHandle = DFColorFromHex(0x728692);
+    theme.splitterHover = DFColorFromHex(0x8EA2AE);
+    theme.splitterDrag = DFColorFromHex(0xAABEC9);
+    theme.clientAreaFill = theme.floatingFrame;
+    theme.clientAreaBorder = theme.dockBorder;
+    theme.controlFill = DFColorFromHex(0x344955);
+    theme.selection = DFColorFromHex(0x335D6B);
     return theme;
 }
 

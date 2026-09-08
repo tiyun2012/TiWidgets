@@ -65,7 +65,7 @@ public:
         const auto& theme = df::CurrentTheme();
 
         const DFRect& b = bounds();
-        dx12->drawRectangle(b, theme.dockBackground);
+        dx12->drawRectangle(b, theme.clientAreaFill);
 
         const bool showTitleBar = isDocked() && isSingleDocked();
         const bool drawCloseIcon = theme.drawTitleBarIcons && visualOptions().drawTitleBarIcons;
@@ -108,6 +108,8 @@ public:
                 const DFRect closeRect = CloseButtonRect(titleBar);
                 const bool hoverClose = hasCursor && closeRect.contains(cursor);
                 DockIconButtonStyle style{};
+                style.iconBase = theme.mutedText;
+                style.iconHover = theme.tabAccent;
                 style.roundHoverBackground = true;
                 style.hoverCornerRadius = 4.0f;
                 DrawDockIconButton(canvas, DockIcon::Close, closeRect, theme.titleBar, hoverClose, style);
@@ -122,13 +124,11 @@ public:
         const DFRect contentHost{b.x, b.y + topOffset, b.width, std::max(0.0f, b.height - topOffset)};
         paintClientArea(canvas, contentHost);
 
-        // Outer frame: when tab-hosted, remove top segment so tab outline and
-        // panel border read as one connected object (Qt-like).
+        // The tab renderer opens the shared edge under the selected tab after
+        // this body is painted, leaving one continuous panel outline.
         const bool tabHosted = isDocked() && isTabified();
         const DFColor frameColor = tabHosted ? theme.tabOutline : theme.dockBorder;
-        if (!tabHosted) {
-            dx12->drawRectangle({b.x, b.y, b.width, 1.0f}, frameColor);
-        }
+        dx12->drawRectangle({b.x, b.y, b.width, 1.0f}, frameColor);
         dx12->drawRectangle({b.x, b.y + b.height - 1.0f, b.width, 1.0f}, frameColor);
         dx12->drawRectangle({b.x, b.y, 1.0f, b.height}, frameColor);
         dx12->drawRectangle({b.x + b.width - 1.0f, b.y, 1.0f, b.height}, frameColor);

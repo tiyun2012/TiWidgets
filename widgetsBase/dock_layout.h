@@ -111,7 +111,7 @@ public:
         const float gap = 2.0f;
         const float available = std::max(0.0f, axisLength - (leading * 2.0f) - gap * static_cast<float>(tabCount > 0 ? tabCount - 1 : 0));
         const float fitExtent = (tabCount > 0) ? (available / static_cast<float>(tabCount)) : 0.0f;
-        const float preferredExtent = verticalStrip ? 84.0f : 84.0f;
+        const float preferredExtent = verticalStrip ? 100.0f : 148.0f;
         const float minExtent = verticalStrip ? 24.0f : 52.0f;
 
         float extent = preferredExtent;

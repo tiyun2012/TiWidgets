@@ -2,6 +2,23 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "UI: Check Milestones",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/check_ui_milestones.ps1", "-Config", "Debug"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": ["$msCompile"],
+            "group": "test"
+        },
+        {
+            "label": "UI: Preview Workspace",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/preview_ui.ps1", "-LeaveOpen"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": []
+        },
+        {
             "label": "Build Selected Target",
             "type": "shell",
             "command": "cmake",

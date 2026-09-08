@@ -6,7 +6,7 @@ param(
     [switch]$SkipCleanCrash,
     [switch]$ShowConsole,
     [switch]$VerboseEvents,
-    [ValidateSet("baseline", "splitter_stress", "widget_drag_stress", "mixed", "resize_stress", "resize_crash_stress", "close_all", "global_float_sync", "host_transfer_stress")]
+    [ValidateSet("baseline", "splitter_stress", "widget_drag_stress", "mixed", "resize_stress", "resize_crash_stress", "recursive_constraints_stress", "close_all", "global_float_sync", "host_transfer_stress", "ui_workspace", "native_repaint")]
     [string]$Scenario = "baseline",
     [ValidateSet("dark", "light", "slate", "template")]
     [string]$Theme = "dark",
@@ -28,6 +28,7 @@ $env:DF_EVENT_VERBOSE = $(if ($VerboseEvents) { "1" } else { "0" })
 $env:DF_AUTOMATE_EVENTS = "1"
 $env:DF_AUTOMATION_SCENARIO = $Scenario
 $env:DF_THEME = $Theme
+if ($Scenario -eq 'native_repaint') { $env:DF_NATIVE_FLOAT_HOSTS = '1' }
 $env:DF_RESIZE_DEBUG = $(if ($ResizeDebug -or $Scenario -like "resize*") { "1" } else { "0" })
 $env:DF_AUTOMATION_EVENT_SLEEP_MS = $VisualizeDelayMs
 $env:DF_AUTOMATION_RENDER_FRAMES = $RenderFrames

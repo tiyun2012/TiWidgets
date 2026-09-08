@@ -183,7 +183,7 @@ void DockSplitter::render(Canvas& canvas)
         const bool hovered = (hoveredNode_ != nullptr && hoveredNode_ == s.node);
 
         const DFColor lineColor = theme.splitter;
-        DFColor handleColor = theme.splitter;
+        DFColor handleColor = theme.splitterHandle;
         if (theme.drawSplitterStateColors) {
             if (dragging) {
                 handleColor = theme.splitterDrag;
@@ -213,7 +213,7 @@ void DockSplitter::render(Canvas& canvas)
         if (s.vertical) {
             const float centerX = s.bounds.x + s.bounds.width * 0.5f;
             // Visual rule: splitter edge is thin; handle is ~3x thicker.
-            const float handleW = std::clamp(s.bounds.width * 1.5f, 2.5f, 5.0f);
+            const float handleW = std::clamp(s.bounds.width * 1.5f, 2.5f, 5.0f) * theme.splitterHandleScale;
             const float handleH = std::min(s.bounds.height, std::clamp(s.bounds.height * 0.08f, 24.0f, 70.0f));
             const DFRect handle{
                 centerX - handleW * 0.5f,
@@ -249,7 +249,7 @@ void DockSplitter::render(Canvas& canvas)
 
         const float centerY = s.bounds.y + s.bounds.height * 0.5f;
         // Visual rule: splitter edge is thin; handle is ~3x thicker.
-        const float handleH = std::clamp(s.bounds.height * 1.5f, 2.5f, 5.0f);
+        const float handleH = std::clamp(s.bounds.height * 1.5f, 2.5f, 5.0f) * theme.splitterHandleScale;
         const float handleW = std::min(s.bounds.width, std::clamp(s.bounds.width * 0.08f, 24.0f, 70.0f));
         const DFRect handle{
             s.bounds.x + (s.bounds.width - handleW) * 0.5f,

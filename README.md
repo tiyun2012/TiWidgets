@@ -1,4 +1,28 @@
-﻿# TI
+# TiWidgets
+
+Native C++17 docking framework with a DirectX 12 workspace demo.
+
+Preview the UI and check developer milestones:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check_ui_milestones.ps1 -Config Debug -CapturePreviews
+```
+
+This builds the project, runs docking and workspace tests, captures dark/light/slate
+and compact previews, and compares normal rendering with a GPU batching stress
+capture. Each milestone prints progress and writes logs, JUnit results and
+`artifacts/milestones/latest-Debug.json`. Omit `-CapturePreviews` for unattended
+checks; the report explicitly marks visual capture as skipped.
+
+Open the interactive preview after building:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -LeaveOpen
+```
+
+[Changes, verification and debug checkpoints](docs/UI_MILESTONES.md).
+
+![Modern workspace](docs/previews/workspace-dark.png)
 
 ## Automation Quick Start
 

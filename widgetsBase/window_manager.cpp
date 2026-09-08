@@ -298,16 +298,21 @@ void WindowFrame::render(Canvas& canvas)
         float closeY = bounds_.y + CLOSE_BUTTON_PADDING;
         DFRect closeButton{closeX, closeY, CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE};
         DockIconButtonStyle style{};
-        style.iconBase = {0.96f, 0.97f, 1.0f, 1.0f};
-        style.iconHover = {1.0f, 1.0f, 1.0f, 1.0f};
-        style.iconThickness = 2.2f;
-        style.hoverIconThickness = 2.4f;
+        style.iconBase = theme.mutedText;
+        style.iconHover = theme.tabAccent;
+        style.iconThickness = 1.0f;
+        style.hoverIconThickness = 1.5f;
         style.roundHoverBackground = true;
         style.hoverCornerRadius = 2.667f;
         DrawDockIconButton(canvas, DockIcon::Close, closeButton, theme.titleBar, closeHovered_, style);
     }
 
     if (content_) content_->paint(canvas);
+    // One neutral outline, including the title's upper edge.
+    canvas.drawRectangle({bounds_.x, bounds_.y, bounds_.width, 1}, theme.dockBorder);
+    canvas.drawRectangle({bounds_.x, bounds_.y, 1, bounds_.height}, theme.dockBorder);
+    canvas.drawRectangle({bounds_.x + bounds_.width - 1, bounds_.y, 1, bounds_.height}, theme.dockBorder);
+    canvas.drawRectangle({bounds_.x, bounds_.y + bounds_.height - 1, bounds_.width, 1}, theme.dockBorder);
 }
 
 // -------- WindowManager ----------
