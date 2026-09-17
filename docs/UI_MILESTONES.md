@@ -1,6 +1,7 @@
 # Modern workspace milestones
 
-Completed on 2026-09-09. This remains an independent C++17/DX12 framework.
+The original workspace milestones were completed on 2026-09-09. The configuration
+and UI Gallery update is documented separately below. This remains an independent C++17/DX12 framework.
 Qt's [main window](https://doc.qt.io/qt-6/qmainwindow.html) and
 [Fluent palette patterns](https://doc.qt.io/qt-6/qtquickcontrols-fluentwinui3.html)
 provided the UI reference; no Qt dependency was added.
@@ -14,13 +15,15 @@ provided the UI reference; no Qt dependency was added.
 | 3. Debug and developer handoff | Complete | Added repeatable milestone gates, isolated test artifacts, before/after previews and debugger checkpoints. |
 | 4. Drag/repaint stability | Complete | Buffered native painting, removed repeated window-chrome updates, and added a native move-loop regression. |
 | 5. Appearance refinement | Complete | Joined active tabs to their workspace, reduced and sharpened text, strengthened resize grips, and unified neutral frame edges. |
+| 6. Configurable UI and reusable controls | Complete | Added editable INI styles, six palettes, inherited controls, and a gallery with content tabs and scrolling. |
+| 7. Tab drag position and release | Complete | Preserved the grab point and capture through undocking, allowed dragging outside the main window, recovered lost releases, and deferred native drag rendering. |
 
 The initial failures were obsolete stacked-tab/splitter expectations and a
 compression check comparing minimum sizes with the full viewport instead of the
 available dock area. Enabling tab input also exposed stale drag, reorder and
 floating-window assumptions in automation. These now use actual tab/frame bounds.
 
-## What changed
+## Original workspace changes
 
 - Dark, light and slate palettes cover content, tabs, icons and controls.
 - Tabs have 32px strips, readable labels, close buttons and a continuous active-tab/workspace surface.
@@ -46,6 +49,8 @@ floating-window assumptions in automation. These now use actual tab/frame bounds
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -LeaveOpen
 powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -Theme light
+powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -Theme ocean -Gallery -LeaveOpen
+powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -UiConfig config/rounded.ini -Gallery -LeaveOpen
 powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -NativeHosts -Profiler -LeaveOpen
 powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -Diagnostics
 ```
@@ -54,6 +59,10 @@ The helper captures the actual client area, restores its environment variables,
 and closes the process unless `-LeaveOpen` is supplied. It needs an unobstructed
 interactive Windows desktop. Its default uses in-canvas floating windows for
 repeatable capture; `-NativeHosts` selects separate Win32 floating windows.
+Relative `-UiConfig` paths resolve from the repository root. Omitting `-Theme`
+uses the preset in that file; an explicit `-Theme` changes the palette while
+preserving configured metrics and other overrides. The supported presets are
+dark, light, slate, ocean, forest, rose and template.
 
 | Before | Dark workspace | Light workspace | Compact workspace |
 | --- | --- | --- | --- |
@@ -63,6 +72,7 @@ repeatable capture; `-NativeHosts` selects separate Win32 floating windows.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\check_ui_milestones.ps1 -Config Debug -CapturePreviews
+powershell -ExecutionPolicy Bypass -File .\scripts\check_ui_milestones.ps1 -Config Debug -CapturePreviews -CaptureGallery
 powershell -ExecutionPolicy Bypass -File .\scripts\check_ui_milestones.ps1 -Config Release
 ```
 
@@ -75,8 +85,8 @@ milestones above:
 | --- | --- | --- |
 | M1 | Configure + build | M1.log |
 | M2 | Portable layout and docking/resize scenarios | M2.log, core.xml |
-| M3 | Workspace controls in three themes, native hosts, drag/repaint stability and GPU batching | M3.log, workspace.xml, test-artifacts/ |
-| M4 | Theme/compact captures and normal-vs-batch pixel comparison | M4.log, preview-*.png |
+| M3 | Workspace controls, theme/configuration cases, native hosts, drag/repaint stability and GPU batching | M3.log, workspace.xml, test-artifacts/ |
+| M4 | Six theme/compact captures, optional gallery captures and normal-vs-batch pixel comparison | M4.log, preview-*.png |
 
 `artifacts/milestones/latest-Debug.json` (or `latest-Release.json`) updates before
 and after each gate. Timestamped folders retain Markdown/JSON reports, timing,
@@ -84,6 +94,10 @@ logs and JUnit results. States are **Pending**, **Running**, **Passed**, **Faile
 and **Skipped**. Failures return exit code 1 and retain later gates as Pending.
 Without `-CapturePreviews`, M4 is explicitly Skipped. Screenshot creation is not
 an automatic aesthetic approval; inspect the output images.
+`-CaptureGallery` requires `-CapturePreviews` and adds `preview-gallery-<theme>.png`
+for each of the six palettes. The normal and batch comparison both explicitly
+select dark, so a different preset in the configuration file cannot invalidate
+the comparison.
 
 Individual scenario:
 
@@ -103,8 +117,8 @@ Use function breakpoints or search by symbol; these survive source line changes.
 
 | Investigate | Breakpoints | Expected state |
 | --- | --- | --- |
-| Toolbar / reset | `DX12Demo::handleWorkspaceChrome`, `resetWorkspace` | Seven registered widgets; closed panels restored; no active drag. |
-| Keyboard actions | `DX12Demo::handleShortcutKey` | Ctrl+R reset, Ctrl+T theme, Ctrl+P profiler, F1 diagnostics. |
+| Toolbar / reset | `DX12Demo::handleWorkspaceChrome`, `resetWorkspace` | Registered panels restored; no active drag. |
+| Keyboard actions | `DX12Demo::handleShortcutKey` | Ctrl+R reset, Ctrl+Shift+R reload config, Ctrl+T theme, Ctrl+G gallery, Ctrl+P profiler, F1 diagnostics. |
 | Tab selection / reordering | `beginTabGesture`, `handleTabGesture`, `DockLayout::TabRectForIndex` | One active child; pointer hits the same rectangle that was painted. |
 | Undock / redock | `undockActiveTab`, `DockManager::endFloatingDrag` | HostType and parent window agree with the layout. |
 | Native content | `paintNativeFloatingHost`, `FloatingHostWndProc`, `DemoPanel::handleEvent` | Content receives coordinates relative to its client area. |
@@ -114,7 +128,10 @@ Use function breakpoints or search by symbol; these survive source line changes.
 | Minimum sizes | `DockLayout::update`, `DockSplitter::updateDrag` | Splitter gaps and tab strips included; compression uses dock bounds. |
 | Automated checks | `DX12Demo::runAutomatedEventChecks` | Search for `workspace ... [FAIL]` or inspect JUnit failure output. |
 
-## Verification results
+## Historical verification results (2026-09-09)
+
+These results apply to the original workspace and its follow-ups, before the
+configuration and UI Gallery update. Re-run the gates for current evidence.
 
 | Check | Result |
 | --- | --- |
@@ -191,10 +208,130 @@ exactly. Evidence: [Debug checks](../artifacts/appearance-debug-checks.log),
 [Release checks](../artifacts/appearance-release-checks.log), and
 [native preview](../artifacts/visual/refined-native.png).
 
+## Configurable UI and Gallery (2026-09-10)
+
+[`config/ui.ini`](../config/ui.ini) supplies editable UI settings. `[theme]`
+chooses the preset; `[metrics]` controls button/control/tab heights, corner radii,
+row spacing, scrolling and text sizing; `[colors]` overrides named palette colors;
+and `[features]` toggles rendering options. Omitted values inherit the selected
+preset. A common `cornerRadius` applies to buttons, controls, tabs and client
+areas; specific radius overrides win independent of file order. Component
+heights are independent. See the
+[framework configuration example](../widgetsBase/README.md#configuration-and-inheritance).
+[`compact.ini`](../config/compact.ini) and [`rounded.ini`](../config/rounded.ini)
+provide smaller square and larger rounded profiles for comparison.
+
+The demo reads `DF_UI_CONFIG` when supplied, otherwise looks for `config/ui.ini`
+in its working directory and then beside its executable. **Ctrl+Shift+R** reloads
+the file. **Ctrl+T** cycles six palettes: dark, light, slate, ocean, forest and rose.
+`DF_THEME` can override the file's preset at startup; configuration overrides
+remain applied when the palette changes. `template` remains available as a
+customizable C++ preset.
+
+**Ctrl+G** opens the UI Gallery as a docking tab. Its Controls, Settings and Scroll
+list pages demonstrate buttons, checkboxes, toggles, sliders, progress bars,
+nested tabs and scrollable content. `DF_UI_GALLERY=1` opens it at startup;
+the preview helper exposes this as `-Gallery`. The controls share an inherited
+base for common interaction behavior and resolve styles from the theme through
+parent containers to per-control overrides. Applications can compose or extend
+the [reusable component library](../widgetsBase/README.md#reusable-controls).
+
+The gallery includes over 60 sample components, including 40 selectable list
+items. Settings update the scene highlight, selection label and grid; the slider
+changes preview scale. Wheel scrolling, draggable scrollbars and keyboard focus
+work in docked panels, in-canvas floating frames and native hosts. Content
+coordinates are translated once, with capture retained through a drag and
+cancelled when the window loses focus or capture.
+
+| Ocean | Forest | Rose |
+| --- | --- | --- |
+| [Gallery](previews/gallery-ocean.png) | [Gallery](previews/gallery-forest.png) | [Gallery](previews/gallery-rose.png) |
+
+Validation on 2026-09-10:
+
+| Check | Result |
+| --- | --- |
+| Debug and Release | 25/25 tests passed in each configuration: 12 docking/event tests and 13 UI/configuration tests. |
+| Configuration | Parser validation, transactional errors, corner inheritance, compact/rounded profiles and live reload passed. |
+| Controls | Active-page routing, shared state, keyboard activation, rapid clicks, capture loss, scrolling/clipping and metric limits passed. |
+| Floating content | Gallery button and wheel input passed in native hosts; in-canvas button input passed with a single coordinate translation. |
+| Visual previews | Six workspace and six gallery palettes captured; dark, light, ocean, forest, rose and compact/rounded gallery previews inspected. |
+| GPU batching | Normal and stress captures match byte for byte. |
+
+Evidence: [Debug report](../artifacts/milestones/20260910_001821_108_Debug/report.md)
+and [Release report](../artifacts/milestones/20260910_001914_718_Release/report.md).
+Release visual capture was skipped; the Debug report contains all visual gates.
+Reproduce the gallery captures with `check_ui_milestones.ps1 -Config Debug
+-CapturePreviews -CaptureGallery`.
+
+## Checkbox and toggle edge refinement
+
+The Settings-page checkbox and toggle exposed aliased curve/checkmark edges.
+DX12 now feathers rounded geometry and diagonal strokes, and draws continuous
+inset outline rings. Native hosts use antialiased GDI+ paths for the same shapes.
+Checkbox corners stay below a circular radius even with a rounded theme;
+toggle geometry uses whole-pixel alignment and equal thumb insets.
+
+[Updated Settings preview](previews/boolean-settings.png). Reproduce with:
+
+```powershell
+.\scripts\preview_ui.ps1 -Gallery -GalleryPage Settings -Theme slate -LeaveOpen
+```
+
+Debug and Release each passed all 25 tests after this refinement. Shape tests
+cover control heights 18-96px, checkbox corner limits and toggle symmetry.
+Slate, rounded/rose and compact Settings captures were inspected; the normal
+and GPU batch-stress Settings captures match exactly. Results are in
+`build_dx12/boolean-render-debug.xml` and `boolean-render-release.xml`.
+
+## Tab drag position and release — 2026-09-17
+
+The drag regression reproduced an arbitrary horizontal grab offset (35% of the
+panel width), main-client and desktop clamps that detached the panel from the
+cursor, and native-host activation that cleared capture during undocking. A
+missed button-up left the docking drag active. Native `WM_MOVING` also rendered
+and waited for presentation/GPU completion synchronously.
+
+The implementation now retains the original tab grab point, keeps the source
+window's capture while showing the new host without activation, and preserves
+signed/outside pointer coordinates. Floating panels can extend beyond desktop
+edges while the grabbed title point stays with the pointer. Native geometry
+updates on mouse input before rendering. Button-free mouse movement cancels a
+missed release; capture loss, focus loss, cancel mode and Escape close the drag.
+
+Native move callbacks update docking candidates and queue a redraw. A 16ms timer
+coalesces hint rendering and presents without a v-sync wait during the modal
+move loop; ordinary frames keep display synchronization. The measured native
+move callback dropped from 7.7ms to 0.1ms in the visible Debug probe. This is a
+callback measurement, not an end-to-end input-latency benchmark.
+
+| Check | Result |
+| --- | --- |
+| Debug and Release | 27/27 tests passed in each configuration. |
+| New drag scenarios | Both in-canvas and native hosts retain the grab point; negative/outside movement, outside release, missed release, capture/focus loss, cancel mode and Escape pass. |
+| Docking hints | Move callbacks do not submit frames; the timer presents queued hints once and stays idle without changes. |
+| Visible native hosts | Undocking preserves source capture; the pre-fix visible probe lost it. |
+| Real mouse input | Inspector followed an 860px/70px move outside the main window and stayed fixed after physical release and subsequent pointer movement. |
+
+Re-run the regression with:
+
+```powershell
+ctest --test-dir build_dx12 -C Debug -R dx12_tab_drag --output-on-failure
+powershell -ExecutionPolicy Bypass -File .\scripts\run_event_automation.ps1 -Config Debug -Scenario tab_drag -ShowWindow -SkipCleanLog -SkipCleanCrash
+```
+
+Evidence: [before-fix checks](../artifacts/tab-drag-before.log),
+[Debug milestones](../artifacts/milestones/20260917_215418_512_Debug/report.md),
+[Release milestones](../artifacts/milestones/20260917_215544_461_Release/report.md),
+and [real mouse-input check](../artifacts/tab-drag-real-input.log).
+Visual capture gates were skipped for this interaction-only change; the native
+preview was opened and used for the real mouse-input check.
+
 ## Scope remaining
 
 Workspace reset is implemented; serialized layout save/restore is a future
 milestone. The sample property fields are read-only. Full Qt-style accessibility,
-IME/Unicode shaping, a general control library and per-monitor DPI scaling remain
-future framework work. The atlas currently covers printable ASCII, matching the
+IME/Unicode shaping, richer editing controls and per-monitor DPI scaling remain
+future framework work. The gallery supplies an initial reusable control library.
+The atlas currently covers printable ASCII, matching the
 existing demo's text scope.

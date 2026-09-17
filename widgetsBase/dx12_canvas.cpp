@@ -9,6 +9,46 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
+constexpr int kMaxCornerSegments = 64;
+constexpr size_t kMaxContourPoints = 4 * (kMaxCornerSegments + 1);
+
+// Matching samples on each inset contour make a single, nonoverlapping ring.
+// In particular a pill/circle keeps identical tangent points where corners meet.
+struct RoundedContour {
+    std::array<DFPoint, kMaxContourPoints> points{};
+    size_t size = 0;
+};
+
+RoundedContour roundedContour(const DFRect& rect, float radius, float inset, int segments)
+{
+    RoundedContour contour;
+    const float insetRadius = std::max(0.0f, radius - inset);
+    const float left = rect.x + inset, top = rect.y + inset;
+    const float right = rect.x + rect.width - inset, bottom = rect.y + rect.height - inset;
+    for (int corner = 0; corner < 4; ++corner) {
+        const float cx = corner == 0 || corner == 3 ? left + insetRadius : right - insetRadius;
+        const float cy = corner < 2 ? top + insetRadius : bottom - insetRadius;
+        for (int step = 0; step <= segments; ++step) {
+            const float angle = (2.0f + corner + static_cast<float>(step) / segments) * kPi * .5f;
+            // Exact axial endpoints avoid tiny gaps between adjacent quarter arcs.
+            constexpr float cosine[] = {-1, 0, 1, 0, -1};
+            constexpr float sine[] = {0, -1, 0, 1, 0};
+            const float nx = step == 0 ? cosine[corner] : step == segments ? cosine[corner + 1] : std::cos(angle);
+            const float ny = step == 0 ? sine[corner] : step == segments ? sine[corner + 1] : std::sin(angle);
+            contour.points[contour.size++] = {
+                std::clamp(cx + nx * insetRadius, left, right),
+                std::clamp(cy + ny * insetRadius, top, bottom)};
+        }
+    }
+    return contour;
+}
+
+int roundedSegments(float radius)
+{
+    // Keep the polygon error well below a pixel; alpha coverage handles the edge.
+    return std::clamp(static_cast<int>(std::ceil(std::sqrt(radius) * 3.0f)), 8, kMaxCornerSegments);
+}
+
 const char* kVS = R"(
 cbuffer View : register(b0)
 {
@@ -321,6 +361,12 @@ void DX12Canvas::drawRectangle(const DFRect& rect, const DFColor& color)
     vertices_.push_back(v2); vertices_.push_back(v4); vertices_.push_back(v3);
 }
 
+void DX12Canvas::appendTriangle(const D3DVertex& a, const D3DVertex& b, const D3DVertex& c)
+{
+    if (vertices_.size() + 3 > MAX_VERTICES) flush();
+    vertices_.insert(vertices_.end(), {a, b, c});
+}
+
 void DX12Canvas::drawRoundedRectangle(const DFRect& rect, float radius, const DFColor& color)
 {
     if (rect.width <= 0.0f || rect.height <= 0.0f) {
@@ -334,53 +380,23 @@ void DX12Canvas::drawRoundedRectangle(const DFRect& rect, float radius, const DF
         return;
     }
 
-    auto makeVertex = [&](float x, float y) {
-        return D3DVertex{{x, y}, {color.r, color.g, color.b, color.a}};
+    const int segments = roundedSegments(r);
+    const auto outer = roundedContour(rect, r, 0, segments);
+    const auto inner = roundedContour(rect, r, std::min(.75f, maxRadius), segments);
+    auto vertex = [&](const DFPoint& point, float coverage) {
+        return D3DVertex{{point.x, point.y}, {color.r, color.g, color.b, color.a * coverage}};
     };
-    auto addTriangle = [&](const D3DVertex& a, const D3DVertex& b, const D3DVertex& c) {
-        if (vertices_.size() + 3 > MAX_VERTICES) {
-            flush();
-        }
-        vertices_.push_back(a);
-        vertices_.push_back(b);
-        vertices_.push_back(c);
-    };
-    auto addRect = [&](float x, float y, float w, float h) {
-        if (w <= 0.0f || h <= 0.0f) {
-            return;
-        }
-        D3DVertex v1 = makeVertex(x, y);
-        D3DVertex v2 = makeVertex(x + w, y);
-        D3DVertex v3 = makeVertex(x, y + h);
-        D3DVertex v4 = makeVertex(x + w, y + h);
-        addTriangle(v1, v2, v3);
-        addTriangle(v2, v4, v3);
-    };
-
-    addRect(rect.x + r, rect.y + r, rect.width - r * 2.0f, rect.height - r * 2.0f);
-    addRect(rect.x + r, rect.y, rect.width - r * 2.0f, r);
-    addRect(rect.x + r, rect.y + rect.height - r, rect.width - r * 2.0f, r);
-    addRect(rect.x, rect.y + r, r, rect.height - r * 2.0f);
-    addRect(rect.x + rect.width - r, rect.y + r, r, rect.height - r * 2.0f);
-
-    const int segments = std::max(6, static_cast<int>(std::ceil(r * 0.75f)));
-    auto addCornerFan = [&](float cx, float cy, float startAngle, float endAngle) {
-        const D3DVertex center = makeVertex(cx, cy);
-        for (int i = 0; i < segments; ++i) {
-            const float t0 = static_cast<float>(i) / static_cast<float>(segments);
-            const float t1 = static_cast<float>(i + 1) / static_cast<float>(segments);
-            const float a0 = startAngle + (endAngle - startAngle) * t0;
-            const float a1 = startAngle + (endAngle - startAngle) * t1;
-            const D3DVertex p0 = makeVertex(cx + std::cos(a0) * r, cy + std::sin(a0) * r);
-            const D3DVertex p1 = makeVertex(cx + std::cos(a1) * r, cy + std::sin(a1) * r);
-            addTriangle(center, p0, p1);
-        }
-    };
-
-    addCornerFan(rect.x + r, rect.y + r, kPi, kPi * 1.5f);
-    addCornerFan(rect.x + rect.width - r, rect.y + r, kPi * 1.5f, kPi * 2.0f);
-    addCornerFan(rect.x + rect.width - r, rect.y + rect.height - r, 0.0f, kPi * 0.5f);
-    addCornerFan(rect.x + r, rect.y + rect.height - r, kPi * 0.5f, kPi);
+    const auto center = vertex({rect.x + rect.width * .5f, rect.y + rect.height * .5f}, 1);
+    // Feather inward so rounded controls never paint outside their layout/clip
+    // bounds. Interior and edge triangles meet without overlapping alpha blends.
+    for (size_t i = 0; i < outer.size; ++i) {
+        const size_t next = (i + 1) % outer.size;
+        const auto a = vertex(inner.points[i], 1), b = vertex(inner.points[next], 1);
+        const auto c = vertex(outer.points[i], 0), d = vertex(outer.points[next], 0);
+        appendTriangle(center, a, b);
+        appendTriangle(a, c, b);
+        appendTriangle(c, d, b);
+    }
 }
 
 void DX12Canvas::drawRoundedRectangleOutline(const DFRect& rect, float radius, const DFColor& color, float thickness)
@@ -391,7 +407,12 @@ void DX12Canvas::drawRoundedRectangleOutline(const DFRect& rect, float radius, c
 
     const float maxRadius = std::min(rect.width, rect.height) * 0.5f;
     const float r = std::clamp(radius, 0.0f, maxRadius);
-    const float t = std::max(0.5f, thickness);
+    const float t = std::min(maxRadius, std::max(0.5f, thickness));
+
+    if (t >= maxRadius) {
+        drawRoundedRectangle(rect, r, color);
+        return;
+    }
 
     if (r <= 0.01f) {
         drawRectangle({rect.x, rect.y, rect.width, t}, color);
@@ -401,27 +422,29 @@ void DX12Canvas::drawRoundedRectangleOutline(const DFRect& rect, float radius, c
         return;
     }
 
-    drawLine({rect.x + r, rect.y}, {rect.x + rect.width - r, rect.y}, color, t);
-    drawLine({rect.x + r, rect.y + rect.height}, {rect.x + rect.width - r, rect.y + rect.height}, color, t);
-    drawLine({rect.x, rect.y + r}, {rect.x, rect.y + rect.height - r}, color, t);
-    drawLine({rect.x + rect.width, rect.y + r}, {rect.x + rect.width, rect.y + rect.height - r}, color, t);
-
-    const int segments = std::max(8, static_cast<int>(std::ceil(r)));
-    auto drawArc = [&](float cx, float cy, float startAngle, float endAngle) {
-        DFPoint previous{cx + std::cos(startAngle) * r, cy + std::sin(startAngle) * r};
-        for (int i = 1; i <= segments; ++i) {
-            const float tNorm = static_cast<float>(i) / static_cast<float>(segments);
-            const float angle = startAngle + (endAngle - startAngle) * tNorm;
-            DFPoint current{cx + std::cos(angle) * r, cy + std::sin(angle) * r};
-            drawLine(previous, current, color, t);
-            previous = current;
+    const int segments = roundedSegments(r);
+    const float feather = std::min(.65f, t * .5f);
+    const auto outer = roundedContour(rect, r, 0, segments);
+    const auto outerSolid = roundedContour(rect, r, feather, segments);
+    const auto innerSolid = roundedContour(rect, r, t - feather, segments);
+    const auto inner = roundedContour(rect, r, t, segments);
+    auto vertex = [&](const DFPoint& point, float coverage) {
+        return D3DVertex{{point.x, point.y}, {color.r, color.g, color.b, color.a * coverage}};
+    };
+    auto ring = [&](const RoundedContour& outside, const RoundedContour& inside, float outsideCoverage, float insideCoverage) {
+        for (size_t i = 0; i < outside.size; ++i) {
+            const size_t next = (i + 1) % outside.size;
+            const auto a = vertex(outside.points[i], outsideCoverage), b = vertex(outside.points[next], outsideCoverage);
+            const auto c = vertex(inside.points[i], insideCoverage), d = vertex(inside.points[next], insideCoverage);
+            appendTriangle(a, b, c);
+            appendTriangle(b, d, c);
         }
     };
-
-    drawArc(rect.x + r, rect.y + r, kPi, kPi * 1.5f);
-    drawArc(rect.x + rect.width - r, rect.y + r, kPi * 1.5f, kPi * 2.0f);
-    drawArc(rect.x + rect.width - r, rect.y + rect.height - r, 0.0f, kPi * 0.5f);
-    drawArc(rect.x + r, rect.y + rect.height - r, kPi * 0.5f, kPi);
+    // A continuous ring avoids the gaps/overdraw from separately stroked arcs.
+    // Unlike centered strokes, all three bands stay inside the supplied bounds.
+    ring(outer, outerSolid, 0, 1);
+    if (t > 2 * feather) ring(outerSolid, innerSolid, 1, 1);
+    ring(innerSolid, inner, 1, 0);
 }
 
 void DX12Canvas::drawLine(const DFPoint& a, const DFPoint& b, const DFColor& color, float thickness)
@@ -438,6 +461,27 @@ void DX12Canvas::drawLine(const DFPoint& a, const DFPoint& b, const DFColor& col
     const float nx = -dy / len;
     const float ny = dx / len;
     const float half = std::max(0.5f, thickness * 0.5f);
+
+    if (std::abs(dx) > .0001f && std::abs(dy) > .0001f) {
+        // Keep thin horizontal/vertical workspace rules sharp; diagonal glyph
+        // strokes get side coverage within the original butt-ended envelope.
+        // Half a pixel per side retains a solid center on 2 px checkmarks.
+        const float innerHalf = half - std::min(.5f, half);
+        auto vertex = [&](const DFPoint& point, float offset, float coverage) {
+            return D3DVertex{{point.x + nx * offset, point.y + ny * offset},
+                {color.r, color.g, color.b, color.a * coverage}};
+        };
+        auto strip = [&](float offsetA, float offsetB, float coverageA, float coverageB) {
+            const auto v1 = vertex(a, offsetA, coverageA), v2 = vertex(a, offsetB, coverageB);
+            const auto v3 = vertex(b, offsetA, coverageA), v4 = vertex(b, offsetB, coverageB);
+            appendTriangle(v1, v2, v3);
+            appendTriangle(v2, v4, v3);
+        };
+        strip(-half, -innerHalf, 0, 1);
+        if (innerHalf > 0) strip(-innerHalf, innerHalf, 1, 1);
+        strip(innerHalf, half, 1, 0);
+        return;
+    }
 
     const D3DVertex v1{{a.x + nx * half, a.y + ny * half}, {color.r, color.g, color.b, color.a}};
     const D3DVertex v2{{a.x - nx * half, a.y - ny * half}, {color.r, color.g, color.b, color.a}};

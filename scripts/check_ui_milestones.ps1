@@ -1,10 +1,12 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Config = 'Debug',
     [string]$BuildDir = 'build_dx12',
-    [switch]$CapturePreviews
+    [switch]$CapturePreviews,
+    [switch]$CaptureGallery
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CaptureGallery -and -not $CapturePreviews) { throw '-CaptureGallery requires -CapturePreviews.' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 $runDir = Join-Path $repoRoot ("artifacts/milestones/{0}_{1}" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'), $Config)
@@ -89,13 +91,17 @@ try {
     }
     if ($CapturePreviews) {
         Invoke-Milestone 3 {
-            foreach ($theme in @('dark', 'light', 'slate')) {
+            foreach ($theme in @('dark', 'light', 'slate', 'ocean', 'forest', 'rose')) {
                 powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -Theme $theme -OutputPath (Join-Path $runDir "preview-$theme.png")
                 Assert-Exit "$theme preview"
+                if ($CaptureGallery) {
+                    powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -Theme $theme -Gallery -OutputPath (Join-Path $runDir "preview-gallery-$theme.png")
+                    Assert-Exit "$theme gallery preview"
+                }
             }
-            powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -Width 800 -Height 560 -OutputPath (Join-Path $runDir 'preview-compact.png')
+            powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -Theme dark -Width 800 -Height 560 -OutputPath (Join-Path $runDir 'preview-compact.png')
             Assert-Exit 'Compact preview'
-            powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -BatchStress -OutputPath (Join-Path $runDir 'preview-batch.png')
+            powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/preview_ui.ps1" -Config $Config -BuildDir $BuildDir -Theme dark -BatchStress -OutputPath (Join-Path $runDir 'preview-batch.png')
             Assert-Exit 'Batch preview'
             # Caption, cursor and desktop borders are excluded from these client captures.
             $normalHash = (Get-FileHash -LiteralPath (Join-Path $runDir 'preview-dark.png')).Hash

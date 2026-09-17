@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <string>
 
@@ -9,6 +10,15 @@
 namespace df {
 
 struct DockTheme {
+    // Shared sizing inherited by buttons, forms, lists and scroll containers.
+    float buttonHeight = 30.0f;
+    float buttonCornerRadius = 4.0f;
+    float controlHeight = 32.0f;
+    float controlCornerRadius = 4.0f;
+    float rowHeight = 34.0f;
+    float spacing = 10.0f;
+    float scrollbarWidth = 10.0f;
+    float scrollStep = 34.0f;
     // Single title-bar color used everywhere (docked + floating).
     DFColor titleBar{DFColorFromHex(0x252B34)};
     DFColor dockBackground{DFColorFromHex(0x20242B)};
@@ -130,6 +140,100 @@ inline DockTheme MakeSlateTheme()
     return theme;
 }
 
+inline DockTheme MakeOceanTheme()
+{
+    DockTheme theme = MakeDarkTheme();
+    theme.titleBar = DFColorFromHex(0x102D40);
+    theme.dockBackground = DFColorFromHex(0x092231);
+    theme.dockBorder = DFColorFromHex(0x2D5369);
+    theme.floatingFrame = theme.titleBar;
+    theme.floatingCloseButton = theme.titleBar;
+    theme.tabStrip = theme.dockBackground;
+    theme.tabActive = theme.titleBar;
+    theme.tabInactive = theme.dockBackground;
+    theme.tabOutline = theme.dockBorder;
+    theme.tabAccent = DFColorFromHex(0x48D6EA);
+    theme.text = DFColorFromHex(0xE2F7FF);
+    theme.mutedText = DFColorFromHex(0x98BECE);
+    theme.tabTextActive = theme.text;
+    theme.tabTextInactive = theme.mutedText;
+    theme.splitter = theme.dockBorder;
+    theme.splitterHandle = DFColorFromHex(0x598399);
+    theme.splitterHover = DFColorFromHex(0x72ACBD);
+    theme.splitterDrag = theme.tabAccent;
+    theme.overlayAccent = theme.tabAccent;
+    theme.overlayAccentSoft = DFColorFromHex(0x48D6EA, 0.20f);
+    theme.clientAreaFill = theme.titleBar;
+    theme.clientAreaBorder = theme.dockBorder;
+    theme.controlFill = DFColorFromHex(0x1A4055);
+    theme.selection = DFColorFromHex(0x1B6279);
+    theme.success = DFColorFromHex(0x7BE5BA);
+    return theme;
+}
+
+inline DockTheme MakeForestTheme()
+{
+    DockTheme theme = MakeDarkTheme();
+    theme.titleBar = DFColorFromHex(0x23382E);
+    theme.dockBackground = DFColorFromHex(0x192A22);
+    theme.dockBorder = DFColorFromHex(0x456451);
+    theme.floatingFrame = theme.titleBar;
+    theme.floatingCloseButton = theme.titleBar;
+    theme.tabStrip = theme.dockBackground;
+    theme.tabActive = theme.titleBar;
+    theme.tabInactive = theme.dockBackground;
+    theme.tabOutline = theme.dockBorder;
+    theme.tabAccent = DFColorFromHex(0xAFE08A);
+    theme.text = DFColorFromHex(0xEAF5E5);
+    theme.mutedText = DFColorFromHex(0xADBEAA);
+    theme.tabTextActive = theme.text;
+    theme.tabTextInactive = theme.mutedText;
+    theme.splitter = theme.dockBorder;
+    theme.splitterHandle = DFColorFromHex(0x78977C);
+    theme.splitterHover = DFColorFromHex(0x96B492);
+    theme.splitterDrag = theme.tabAccent;
+    theme.overlayAccent = theme.tabAccent;
+    theme.overlayAccentSoft = DFColorFromHex(0xAFE08A, 0.20f);
+    theme.clientAreaFill = theme.titleBar;
+    theme.clientAreaBorder = theme.dockBorder;
+    theme.controlFill = DFColorFromHex(0x324B3D);
+    theme.selection = DFColorFromHex(0x456C42);
+    theme.success = DFColorFromHex(0xA1E8A3);
+    return theme;
+}
+
+inline DockTheme MakeRoseTheme()
+{
+    DockTheme theme = MakeLightTheme();
+    theme.titleBar = DFColorFromHex(0xFFF7F8);
+    theme.dockBackground = DFColorFromHex(0xF3E7EC);
+    theme.dockBorder = DFColorFromHex(0xCEB3C0);
+    theme.floatingFrame = theme.titleBar;
+    theme.floatingCloseButton = theme.titleBar;
+    theme.tabStrip = theme.dockBackground;
+    theme.tabActive = theme.titleBar;
+    theme.tabInactive = theme.dockBackground;
+    theme.tabOutline = theme.dockBorder;
+    theme.tabAccent = DFColorFromHex(0xAF3F72);
+    theme.text = DFColorFromHex(0x472D40);
+    theme.mutedText = DFColorFromHex(0x79586C);
+    theme.tabTextActive = theme.text;
+    theme.tabTextInactive = theme.mutedText;
+    theme.splitter = theme.dockBorder;
+    theme.splitterHandle = DFColorFromHex(0xA58093);
+    theme.splitterHover = DFColorFromHex(0x896377);
+    theme.splitterDrag = theme.tabAccent;
+    theme.overlayPanel = DFColorFromHex(0xFFF7F8, 0.90f);
+    theme.overlayAccent = theme.tabAccent;
+    theme.overlayAccentSoft = DFColorFromHex(0xAF3F72, 0.20f);
+    theme.clientAreaFill = theme.titleBar;
+    theme.clientAreaBorder = theme.dockBorder;
+    theme.controlFill = DFColorFromHex(0xEBD9E3);
+    theme.selection = DFColorFromHex(0xE8BCD1);
+    theme.success = DFColorFromHex(0x257252);
+    return theme;
+}
+
 // Template preset intended for local customization.
 inline DockTheme MakeTemplateTheme()
 {
@@ -158,11 +262,29 @@ inline std::string NormalizeThemeName(std::string name)
     return name;
 }
 
+inline const std::array<const char*, 6>& ThemePresetNames()
+{
+    static const std::array<const char*, 6> names{{
+        "dark", "light", "slate", "ocean", "forest", "rose"
+    }};
+    return names;
+}
+
+inline bool IsThemePresetName(const std::string& name)
+{
+    const std::string key = NormalizeThemeName(name);
+    const auto& names = ThemePresetNames();
+    return key == "template" || std::find(names.begin(), names.end(), key) != names.end();
+}
+
 inline DockTheme ThemeFromName(const std::string& name)
 {
     const std::string key = NormalizeThemeName(name);
     if (key == "light") return MakeLightTheme();
     if (key == "slate") return MakeSlateTheme();
+    if (key == "ocean") return MakeOceanTheme();
+    if (key == "forest") return MakeForestTheme();
+    if (key == "rose") return MakeRoseTheme();
     if (key == "template") return MakeTemplateTheme();
     return MakeDarkTheme();
 }

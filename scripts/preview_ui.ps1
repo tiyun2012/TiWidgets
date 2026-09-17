@@ -1,21 +1,28 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Config = 'Debug',
     [string]$BuildDir = 'build_dx12',
-    [ValidateSet('dark', 'light', 'slate', 'template')][string]$Theme = 'dark',
+    [ValidateSet('dark', 'light', 'slate', 'ocean', 'forest', 'rose', 'template')][string]$Theme,
+    [string]$UiConfig = 'config/ui.ini',
     [string]$OutputPath = 'artifacts/visual/preview.png',
     [int]$Width = 1280,
     [int]$Height = 720,
     [switch]$BatchStress,
     [switch]$Profiler,
     [switch]$Diagnostics,
+    [switch]$Gallery,
+    [ValidateSet('Controls', 'Settings', 'ScrollList')][string]$GalleryPage = 'Controls',
     [switch]$NativeHosts,
     [switch]$LeaveOpen
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $repoRoot "$BuildDir/bin/$Config/dx12_demo.exe"
+if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repoRoot $BuildDir }
+$exe = Join-Path $BuildDir "bin/$Config/dx12_demo.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "Build dx12_demo first: $exe" }
+if (-not [IO.Path]::IsPathRooted($UiConfig)) { $UiConfig = Join-Path $repoRoot $UiConfig }
+if (-not (Test-Path -LiteralPath $UiConfig -PathType Leaf)) { throw "UI configuration does not exist: $UiConfig" }
+$UiConfig = (Resolve-Path -LiteralPath $UiConfig).ProviderPath
 if (-not [IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $repoRoot $OutputPath }
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
 Add-Type -AssemblyName System.Drawing
@@ -35,7 +42,7 @@ public static class TiPreviewWindow {
 }
 '@
 [TiPreviewWindow]::SetProcessDPIAware() | Out-Null
-$envNames = @('DF_AUTOMATE_EVENTS', 'DF_EVENT_CONSOLE', 'DF_EVENT_VERBOSE', 'DF_NATIVE_FLOAT_HOSTS', 'DF_THEME', 'DF_CANVAS_BATCH_STRESS')
+$envNames = @('DF_AUTOMATE_EVENTS', 'DF_EVENT_CONSOLE', 'DF_EVENT_VERBOSE', 'DF_NATIVE_FLOAT_HOSTS', 'DF_THEME', 'DF_UI_CONFIG', 'DF_UI_GALLERY', 'DF_UI_GALLERY_PAGE', 'DF_UI_PROFILER', 'DF_CANVAS_BATCH_STRESS')
 $savedEnv = @{}
 foreach ($name in $envNames) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $process = $null
@@ -44,7 +51,12 @@ try {
     $env:DF_EVENT_CONSOLE = '0'
     $env:DF_EVENT_VERBOSE = '0'
     $env:DF_NATIVE_FLOAT_HOSTS = $(if ($NativeHosts) { '1' } else { '0' })
-    $env:DF_THEME = $Theme
+    # An omitted -Theme lets the file choose its preset, even if DF_THEME was inherited.
+    [Environment]::SetEnvironmentVariable('DF_THEME', $(if ($PSBoundParameters.ContainsKey('Theme')) { $Theme } else { $null }), 'Process')
+    $env:DF_UI_CONFIG = $UiConfig
+    $env:DF_UI_GALLERY = $(if ($Gallery) { '1' } else { '0' })
+    $env:DF_UI_GALLERY_PAGE = [string](@('Controls', 'Settings', 'ScrollList').IndexOf($GalleryPage))
+    $env:DF_UI_PROFILER = $(if ($Profiler) { '1' } else { '0' })
     $env:DF_CANVAS_BATCH_STRESS = $(if ($BatchStress) { '1' } else { '0' })
     # A visible window is intentional: this command previews the interactive UI.
     $process = Start-Process -FilePath $exe -WorkingDirectory $repoRoot -PassThru -WindowStyle Normal
@@ -64,11 +76,6 @@ try {
     $frameH = ($outer.Bottom - $outer.Top) - $client.Bottom
     [TiPreviewWindow]::SetWindowPos($handle, [IntPtr]::Zero, 30, 30, ($Width + $frameW), ($Height + $frameH), 0x0040) | Out-Null
     [TiPreviewWindow]::SetForegroundWindow($handle) | Out-Null
-    if ($Profiler) {
-        $point = [IntPtr]((56 -shl 16) -bor 350)
-        [TiPreviewWindow]::SendMessage($handle, 0x0201, [IntPtr]1, $point) | Out-Null
-        [TiPreviewWindow]::SendMessage($handle, 0x0202, [IntPtr]::Zero, $point) | Out-Null
-    }
     if ($Diagnostics) { [TiPreviewWindow]::SendMessage($handle, 0x0100, [IntPtr]0x70, [IntPtr]::Zero) | Out-Null }
     Start-Sleep -Milliseconds 900
     if (-not [TiPreviewWindow]::GetWindowRect($handle, [ref]$outer)) { throw 'Cannot read preview bounds.' }

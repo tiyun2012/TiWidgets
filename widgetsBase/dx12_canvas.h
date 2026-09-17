@@ -44,6 +44,7 @@ public:
     void clear();
 
 private:
+    void appendTriangle(const D3DVertex& a, const D3DVertex& b, const D3DVertex& c);
     void initializePipeline();
     void createVertexBuffer(size_t vertexCount);
     void initializeFontAtlas();

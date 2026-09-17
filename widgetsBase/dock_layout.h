@@ -149,7 +149,7 @@ public:
 
     static float ThemeTabBarHeight()
     {
-        return std::clamp(CurrentTheme().tabBarHeight, 12.0f, 40.0f);
+        return std::clamp(CurrentTheme().tabBarHeight, 12.0f, 96.0f);
     }
 
     static constexpr float SplitterGapPx()

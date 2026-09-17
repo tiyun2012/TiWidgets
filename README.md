@@ -8,8 +8,8 @@ Preview the UI and check developer milestones:
 powershell -ExecutionPolicy Bypass -File .\scripts\check_ui_milestones.ps1 -Config Debug -CapturePreviews
 ```
 
-This builds the project, runs docking and workspace tests, captures dark/light/slate
-and compact previews, and compares normal rendering with a GPU batching stress
+This builds the project, runs docking and workspace tests, captures six theme
+presets and a compact preview, and compares normal rendering with a GPU batching stress
 capture. Each milestone prints progress and writes logs, JUnit results and
 `artifacts/milestones/latest-Debug.json`. Omit `-CapturePreviews` for unattended
 checks; the report explicitly marks visual capture as skipped.
@@ -18,7 +18,23 @@ Open the interactive preview after building:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -LeaveOpen
+powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -Theme ocean -Gallery -LeaveOpen
+powershell -ExecutionPolicy Bypass -File .\scripts\preview_ui.ps1 -UiConfig config/rounded.ini -Gallery -LeaveOpen
 ```
+
+Edit [config/ui.ini](config/ui.ini) to change button and tab heights, corner
+radii, spacing, colors and rendering features. Press **Ctrl+Shift+R** to reload
+the file, **Ctrl+T** to cycle dark, light, slate, ocean, forest and rose themes,
+and **Ctrl+G** to open the UI Gallery with reusable controls, tabs and scrolling.
+The `template` preset remains available for C++ customization.
+Try [compact.ini](config/compact.ini) for smaller square controls and
+[rounded.ini](config/rounded.ini) for larger rounded controls.
+
+Use `-UiConfig path/to/custom.ini` to preview another configuration. Relative
+paths resolve from the repository root. The file selects the theme unless you
+pass `-Theme`; changing the theme preserves configured sizes and corners.
+Add `-CaptureGallery` to the milestone command alongside `-CapturePreviews`
+to capture the gallery in each theme.
 
 [Changes, verification and debug checkpoints](docs/UI_MILESTONES.md).
 

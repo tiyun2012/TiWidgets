@@ -32,6 +32,7 @@ public:
         MouseMove,
         MouseDoubleClick,
         MouseDrag,
+        MouseWheel,
         KeyDown,
         KeyUp,
         TextInput,
@@ -41,6 +42,8 @@ public:
     Type type = Type::Unknown;
     float x = 0.0f;
     float y = 0.0f;
+    // Wheel detents; positive values scroll upward (Win32 delta / WHEEL_DELTA).
+    float wheelDelta = 0.0f;
     int key = 0;
     std::string textUtf8{};
     bool shift = false;

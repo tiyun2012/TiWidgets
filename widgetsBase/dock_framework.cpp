@@ -455,23 +455,13 @@ DFRect ComputeDraggedFloatingBounds(
     const DFRect& currentBounds,
     const DFPoint& mousePos,
     const DFPoint& dragGrabOffset,
-    const DFRect& workArea)
+    const DFRect& /*workArea*/)
 {
     DFRect moved = currentBounds;
     moved.x = mousePos.x - dragGrabOffset.x;
     moved.y = mousePos.y - dragGrabOffset.y;
-    if (workArea.width > 0.0f && workArea.height > 0.0f) {
-        if (moved.width > workArea.width) moved.width = workArea.width;
-        if (moved.height > workArea.height) moved.height = workArea.height;
-        const float minX = workArea.x;
-        const float minY = workArea.y;
-        float maxX = workArea.x + workArea.width - moved.width;
-        float maxY = workArea.y + workArea.height - moved.height;
-        if (maxX < minX) maxX = minX;
-        if (maxY < minY) maxY = minY;
-        moved.x = std::clamp(moved.x, minX, maxX);
-        moved.y = std::clamp(moved.y, minY, maxY);
-    }
+    // The pointer owns the grab point. Requiring the entire window to remain
+    // on-screen makes wide panels stop following it near desktop/monitor edges.
     return moved;
 }
 

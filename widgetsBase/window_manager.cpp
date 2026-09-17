@@ -256,11 +256,9 @@ bool WindowFrame::handleEvent(Event& event)
         return true;
     }
 
-    // If the frame didn't consume it, forward to contained widget with local coords.
+    // DockWidget performs the one translation to its content's local coordinates.
     if (content_) {
         Event local = event;
-        local.x -= bounds_.x;
-        local.y -= bounds_.y + TITLE_BAR_HEIGHT; // account for title bar offset
         content_->handleEvent(local);
         if (local.handled) {
             event.handled = true;

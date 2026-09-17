@@ -5,6 +5,7 @@
 #include "window_manager.h"
 #include "dock_splitter.h"
 #include "dock_theme.h"
+#include "ui_config.h"
 #include "dock_renderer.h"
 #include "icon_module.h"
 #include "demo_workspace.h"
@@ -36,6 +37,7 @@
 #include <atomic>
 #include <cmath>
 #include <unordered_map>
+#include <filesystem>
 
 using Microsoft::WRL::ComPtr;
 
@@ -48,9 +50,16 @@ class DX12Demo;
 namespace {
 const int WINDOW_WIDTH = 1280;
 const int WINDOW_HEIGHT = 720;
-constexpr float kWorkspaceTop = 80.0f;
+float WorkspaceTop() { return 50.0f + df::CurrentTheme().buttonHeight; }
 constexpr float kWorkspaceStatus = 28.0f;
 constexpr bool kEnableTabUi = true;
+
+DFRect WorkspaceButton(int index, float width)
+{
+    const float gap = df::CurrentTheme().spacing;
+    const float buttonWidth = std::min(144.0f, std::max(0.0f, (width - 32.0f - 5 * gap) / 6));
+    return {16.0f + index * (buttonWidth + gap), 42, buttonWidth, df::CurrentTheme().buttonHeight};
+}
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -123,9 +132,9 @@ DFRect ComputeMainClientRect(const DFRect& viewRect, const df::DockTheme& theme)
     const float pad = std::clamp(theme.clientAreaPadding * 0.5f, 1.0f, 3.0f);
     return {
         viewRect.x + pad,
-        viewRect.y + std::min(kWorkspaceTop, viewRect.height) + pad,
+        viewRect.y + std::min(WorkspaceTop(), viewRect.height) + pad,
         std::max(0.0f, viewRect.width - pad * 2.0f),
-        std::max(0.0f, viewRect.height - kWorkspaceTop - kWorkspaceStatus - pad * 2.0f)
+        std::max(0.0f, viewRect.height - WorkspaceTop() - kWorkspaceStatus - pad * 2.0f)
     };
 }
 
@@ -183,9 +192,11 @@ struct TabGestureState {
     int tabIndex = 0;
     DFRect strip{};
     DFPoint start{};
+    DFPoint grabOffset{};
 };
 
 constexpr float kTabUndockDragThresholdPx = 10.0f;
+constexpr UINT_PTR kNativeDragRenderTimer = 0xDF01;
 
 const char* ActionOwnerName(ActionOwner action)
 {
@@ -552,6 +563,7 @@ private:
         case Event::Type::MouseDrag: return "MouseDrag";
         case Event::Type::MouseUp: return "MouseUp";
         case Event::Type::MouseMove: return "MouseMove";
+        case Event::Type::MouseWheel: return "MouseWheel";
         case Event::Type::KeyDown: return "KeyDown";
         case Event::Type::KeyUp: return "KeyUp";
         case Event::Type::TextInput: return "TextInput";
@@ -620,14 +632,17 @@ private:
     void initDocking();
     void resetWorkspace();
     void cycleTheme();
+    void applyConfiguredTheme();
+    bool reloadUiConfig(bool startup = false);
+    void toggleGallery();
     void toggleProfiler();
     void renderWorkspaceChrome();
     bool handleWorkspaceChrome(Event& event);
-    void renderFrame();
+    void renderFrame(bool syncToDisplay = true);
     void waitForGPU();
     void handleResize(UINT width, UINT height);
     LRESULT handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam);
-    LRESULT handleKeyMessage(WPARAM wParam, LPARAM lParam);
+    LRESULT handleKeyMessage(WPARAM wParam, LPARAM lParam, bool released = false);
     LRESULT handleCharMessage(WPARAM wParam, LPARAM lParam);
     void processEvent(Event& event);
     void dispatchMouseEvent(Event& event);
@@ -647,6 +662,7 @@ private:
     void renderDebugOverlay();
     void updateStatusCaption();
     void clearActiveAction();
+    void cancelPointerInteraction();
     void refreshLayoutState();
     void syncClientOriginScreen();
     void syncNativeFloatingHosts();
@@ -660,6 +676,7 @@ private:
     void applyWindowTitleBarStyle(HWND hwnd) const;
     bool runAutomatedEventChecks();
     bool runNativeRepaintChecks();
+    bool runTabDragChecks();
     bool injectEvent(Event::Type type, float x, float y, const char* expectedPrefix, const char* label);
 
     HWND hwnd_ = nullptr;
@@ -667,6 +684,10 @@ private:
     bool automationMode_ = false;
     std::string lastDispatchHandler_;
     std::string themeName_ = "dark";
+    df::UiConfig uiConfig_;
+    std::string uiConfigPath_;
+    std::string configStatus_;
+    df::DockWidget* contentCapture_ = nullptr;
 
     // D3D12
     ComPtr<ID3D12Device> device_;
@@ -709,7 +730,7 @@ private:
     UINT pendingResizeW_ = 0;
     UINT pendingResizeH_ = 0;
     bool liveResizeRenderInProgress_ = false;
-    bool liveNativeMoveRenderInProgress_ = false;
+    bool nativeDragRenderPending_ = false;
     bool rendering_ = false;
     std::string lastWindowCaption_;
     bool statusDirty_ = true;
@@ -730,6 +751,7 @@ private:
         df::WindowFrame* frame = nullptr;
         bool syncing = false;
         bool dockDragActive = false;
+        bool contentCaptured = false;
         bool inSizeMove = false;
         std::wstring lastTitle;
         COLORREF lastCaptionColor = CLR_INVALID;
@@ -751,30 +773,27 @@ DX12Demo::DX12Demo(HINSTANCE hInstance)
     resizeDebug_ = EnvEnabled("DF_RESIZE_DEBUG", false);
     nativeFloatHostsEnabled_ = EnvEnabled("DF_NATIVE_FLOAT_HOSTS", !automationMode_);
     showDebugOverlay_ = EnvEnabled("DF_DEBUG_OVERLAY", false);
-    themeName_ = EnvString("DF_THEME", "dark");
-    df::SetThemeByName(themeName_);
-    if (EnvEnabled("DF_FAST_VISUALS", false)) {
-        df::DockTheme theme = df::CurrentTheme();
-        df::ApplyFastVisualPreset(theme);
-        df::SetTheme(theme);
-    }
-    const std::string titleBarColorHex = EnvString("DF_TITLE_BAR_COLOR", "");
-    if (!titleBarColorHex.empty()) {
-        DFColor parsed{};
-        if (TryParseHexColor(titleBarColorHex, parsed)) {
-            df::DockTheme theme = df::CurrentTheme();
-            theme.titleBar = parsed;
-            df::SetTheme(theme);
-        } else {
-            eventConsole_.logAutomation(
-                std::string("invalid DF_TITLE_BAR_COLOR='") + titleBarColorHex + "', expected #RRGGBB");
+    uiConfigPath_ = EnvString("DF_UI_CONFIG", "");
+    if (uiConfigPath_.empty()) {
+        uiConfigPath_ = "config/ui.ini";
+        if (!std::filesystem::exists(uiConfigPath_)) {
+            wchar_t executable[32768]{};
+            GetModuleFileNameW(nullptr, executable, 32768);
+            uiConfigPath_ = (std::filesystem::path(executable).parent_path() / "config/ui.ini").string();
         }
     }
+    reloadUiConfig(true);
     eventDurationsMs_.reserve(4096);
     frameTimesMs_.reserve(1024);
     initWindow(hInstance);
     initD3D12();
     initDocking();
+    if (EnvEnabled("DF_UI_GALLERY", false)) {
+        toggleGallery();
+        if (auto* gallery = dynamic_cast<DemoGallery*>(widgets_[7]->content()))
+            gallery->tabs().setActiveIndex(static_cast<size_t>(std::clamp(EnvInt("DF_UI_GALLERY_PAGE", 0), 0, 2)));
+    }
+    if (EnvEnabled("DF_UI_PROFILER", false)) toggleProfiler();
 }
 
 DX12Demo::~DX12Demo()
@@ -905,6 +924,9 @@ void DX12Demo::initDocking()
     auto* profiler = addWidget("Profiler");
     auto* assets = addWidget("Assets");
     auto* timeline = addWidget("Timeline");
+    auto* gallery = addWidget("UI Gallery");
+    gallery->setContent(std::make_unique<DemoGallery>(workspaceState_));
+    gallery->setMinimumSize(360.0f, 240.0f);
 
     // Content-driven minima improve splitter/tab behavior under deep nesting.
     hierarchy->setMinimumSize(250.0f, 220.0f);
@@ -924,6 +946,8 @@ void DX12Demo::resetWorkspace()
     clearActiveAction();
     if (captureActive_) { ReleaseCapture(); captureActive_ = false; }
     leftMouseDown_ = false;
+    contentCapture_ = nullptr;
+    df::WindowManager::instance().clearFocus();
     destroyAllNativeFloatingHosts();
     for (auto& widget : widgets_) df::DockManager::instance().closeWidget(widget.get());
     floatingWindow_ = nullptr;
@@ -958,6 +982,14 @@ void DX12Demo::resetWorkspace()
     root->second->first = std::make_unique<df::DockLayout::Node>();
     root->second->first->type = df::DockLayout::Node::Type::Widget;
     root->second->first->widget = viewport;
+    // Keep the gallery next to the viewport so its tabs and long pages have room.
+    auto viewportNode = std::move(root->second->first);
+    root->second->first = std::make_unique<df::DockLayout::Node>();
+    root->second->first->type = df::DockLayout::Node::Type::Tab;
+    root->second->first->children.push_back(std::move(viewportNode));
+    auto galleryNode = std::make_unique<df::DockLayout::Node>();
+    galleryNode->widget = widgets_[7].get();
+    root->second->first->children.push_back(std::move(galleryNode));
     root->second->second = std::make_unique<df::DockLayout::Node>();
     root->second->second->type = df::DockLayout::Node::Type::Tab;
     root->second->second->activeTab = 0;
@@ -986,12 +1018,79 @@ void DX12Demo::resetWorkspace()
 
 void DX12Demo::cycleTheme()
 {
-    themeName_ = themeName_ == "dark" ? "light" : (themeName_ == "light" ? "slate" : "dark");
-    auto theme = df::ThemeFromName(themeName_);
-    if (EnvEnabled("DF_FAST_VISUALS", false)) df::ApplyFastVisualPreset(theme);
-    df::SetTheme(theme);
+    const auto& names = df::ThemePresetNames();
+    auto it = std::find(names.begin(), names.end(), themeName_);
+    themeName_ = (it == names.end() || ++it == names.end()) ? names.front() : *it;
+    applyConfiguredTheme();
     applyWindowTitleBarStyle(hwnd_);
     refreshLayoutState();
+}
+
+void DX12Demo::applyConfiguredTheme()
+{
+    auto theme = df::ApplyUiConfigOverrides(uiConfig_, df::ThemeFromName(themeName_));
+    if (EnvEnabled("DF_FAST_VISUALS", false)) df::ApplyFastVisualPreset(theme);
+    const std::string titleColor = EnvString("DF_TITLE_BAR_COLOR", "");
+    DFColor parsed{};
+    if (!titleColor.empty() && TryParseHexColor(titleColor, parsed)) theme.titleBar = parsed;
+    df::SetTheme(theme);
+}
+
+bool DX12Demo::reloadUiConfig(bool startup)
+{
+    df::UiConfig candidate;
+    std::string error;
+    if (!df::LoadUiConfig(uiConfigPath_, candidate, error)) {
+        configStatus_ = "Config: " + error;
+        eventConsole_.logAutomation(configStatus_);
+        if (startup) {
+            themeName_ = df::NormalizeThemeName(EnvString("DF_THEME", "dark"));
+            applyConfiguredTheme();
+        }
+        return false;
+    }
+    uiConfig_ = std::move(candidate);
+    themeName_ = df::NormalizeThemeName(EnvString("DF_THEME", uiConfig_.preset.empty() ? themeName_.c_str() : uiConfig_.preset.c_str()));
+    if (!df::IsThemePresetName(themeName_)) {
+        eventConsole_.logAutomation("Unknown DF_THEME '" + themeName_ + "'; using dark");
+        themeName_ = "dark";
+    }
+    applyConfiguredTheme();
+    configStatus_ = "Config loaded / Ctrl+Shift+R reload";
+    if (!startup) {
+        clearActiveAction();
+        applyWindowTitleBarStyle(hwnd_);
+        refreshLayoutState();
+    }
+    return true;
+}
+
+void DX12Demo::toggleGallery()
+{
+    clearActiveAction();
+    auto* gallery = widgets_[7].get();
+    if (gallery->isFloating()) {
+        df::DockManager::instance().closeWidget(gallery);
+    } else {
+        auto* node = FindWidgetNode(layout_.root(), gallery);
+        auto* parent = FindParentTabOfWidget(layout_.root(), gallery);
+        if (parent && parent->type == df::DockLayout::Node::Type::Tab) {
+            for (size_t i = 0; i < parent->children.size(); ++i) {
+                if (parent->children[i].get() == node) {
+                    parent->activeTab = parent->activeTab == static_cast<int>(i)
+                        ? static_cast<int>((i + 1) % parent->children.size()) : static_cast<int>(i);
+                    break;
+                }
+            }
+        } else if (node) {
+            df::DockManager::instance().closeWidget(gallery);
+        } else {
+            df::WindowManager::instance().createFloatingWindow(gallery, {300, 130, 680, 460});
+        }
+    }
+    refreshLayoutState();
+    if (gallery->isFloating() || IsRenderableDockWidget(gallery))
+        df::WindowManager::instance().setFocus(gallery->content());
 }
 
 void DX12Demo::toggleProfiler()
@@ -1011,31 +1110,32 @@ void DX12Demo::toggleProfiler()
 void DX12Demo::renderWorkspaceChrome()
 {
     const auto& t = df::CurrentTheme();
-    canvas_->drawRectangle({0, 0, viewport_.Width, kWorkspaceTop}, t.titleBar);
+    canvas_->drawRectangle({0, 0, viewport_.Width, WorkspaceTop()}, t.titleBar);
     canvas_->drawRoundedRectangle({16, 10, 24, 24}, 5, t.tabAccent);
     DFDrawText(*canvas_, 22, 16, "T", t.titleBar, 0.9f, false);
     DFDrawText(*canvas_, 52, 16, "TiWidgets / Workspace", t.text, 0.9f, false);
-    const char* labels[] = {"Reset layout", "Theme", "Profiler", "Diagnostics"};
-    for (int i = 0; i < 4; ++i) {
-        const DFRect button{16.0f + i * 156.0f, 42, 144, 28};
+    const char* labels[] = {"Reset layout", "Theme", "Profiler", "Diagnostics", "UI Gallery", "Reload style"};
+    for (int i = 0; i < 6; ++i) {
+        const DFRect button = WorkspaceButton(i, viewport_.Width);
         if (button.x + button.width > viewport_.Width - 8) break;
         const bool hover = button.contains(lastMousePos_);
         const bool selected = (i == 2 && (widgets_[4]->isFloating() || FindWidgetNode(layout_.root(), widgets_[4].get()))) ||
-            (i == 3 && showDebugOverlay_);
-        canvas_->drawRoundedRectangle(button, 4, selected || hover ? t.selection : t.controlFill);
-        DFDrawText(*canvas_, button.x + 10, button.y + 8, labels[i], t.text, 0.8f, false);
+            (i == 3 && showDebugOverlay_) || (i == 4 && widgets_[7]->bounds().width > 0);
+        canvas_->drawRoundedRectangle(button, t.buttonCornerRadius, selected || hover ? t.selection : t.controlFill);
+        DFDrawText(*canvas_, button.x + 10, DFTextBaselineYForRect(button, 0.8f),
+            DFClipTextToWidth(labels[i], button.width - 20, true, 0.8f), t.text, 0.8f, false);
     }
     const float statusY = std::max(0.0f, viewport_.Height - kWorkspaceStatus);
     canvas_->drawRectangle({0, statusY, viewport_.Width, kWorkspaceStatus}, t.titleBar);
     canvas_->drawRectangle({0, statusY, viewport_.Width, 1}, t.dockBorder);
-    std::string status = "Ready";
+    std::string status = configStatus_.empty() ? "Ready" : configStatus_;
     if (activeAction_ != ActionOwner::None) status = std::string("Action: ") + ActionOwnerName(activeAction_);
-    else if (lastMousePos_.y >= 42 && lastMousePos_.y <= 70) {
-        const char* hints[] = {"Restore all panels / Ctrl+R", "Cycle dark, light, slate / Ctrl+T", "Toggle live profiler / Ctrl+P", "Toggle input diagnostics / F1"};
-        for (int i = 0; i < 4; ++i)
-            if (DFRect{16.0f + i * 156.0f, 42, 144, 28}.contains(lastMousePos_)) status = hints[i];
+    else if (lastMousePos_.y >= 42 && lastMousePos_.y <= 42 + t.buttonHeight) {
+        const char* hints[] = {"Restore all panels / Ctrl+R", "Cycle six themes / Ctrl+T", "Toggle live profiler / Ctrl+P", "Toggle input diagnostics / F1", "Explore controls / Ctrl+G", "Reload config / Ctrl+Shift+R"};
+        for (int i = 0; i < 6; ++i)
+            if (WorkspaceButton(i, viewport_.Width).contains(lastMousePos_)) status = hints[i];
     }
-    DFDrawText(*canvas_, 16, statusY + 8, DFClipTextToWidth(status, viewport_.Width - 28, true, 0.75f), t.mutedText, 0.75f, false);
+    DFDrawText(*canvas_, 16, statusY + 8, DFClipTextToWidth(status, viewport_.Width - (viewport_.Width > 800 ? 400 : 28), true, 0.75f), t.mutedText, 0.75f, false);
     if (viewport_.Width > 800) {
         const std::string right = themeName_ + "   |   Ctrl+Tab switch panels";
         DFDrawText(*canvas_, viewport_.Width - 370, statusY + 8, right, t.mutedText, 0.75f, false);
@@ -1044,15 +1144,17 @@ void DX12Demo::renderWorkspaceChrome()
 
 bool DX12Demo::handleWorkspaceChrome(Event& event)
 {
-    if (event.y >= kWorkspaceTop && event.y < viewport_.Height - kWorkspaceStatus) return false;
+    if (event.y >= WorkspaceTop() && event.y < viewport_.Height - kWorkspaceStatus) return false;
     if (event.type == Event::Type::MouseDown) {
-        for (int i = 0; i < 4; ++i) {
-            const DFRect button{16.0f + i * 156.0f, 42, 144, 28};
+        for (int i = 0; i < 6; ++i) {
+            const DFRect button = WorkspaceButton(i, viewport_.Width);
             if (button.x + button.width > viewport_.Width - 8 || !button.contains({event.x, event.y})) continue;
             if (i == 0) resetWorkspace();
             else if (i == 1) cycleTheme();
             else if (i == 2) toggleProfiler();
-            else showDebugOverlay_ = !showDebugOverlay_;
+            else if (i == 3) showDebugOverlay_ = !showDebugOverlay_;
+            else if (i == 4) toggleGallery();
+            else reloadUiConfig();
         }
     }
     event.handled = true;
@@ -1068,6 +1170,12 @@ void DX12Demo::refreshLayoutState()
     const DFRect clientRect = ComputeMainClientRect(viewRect, theme);
     df::DockManager::instance().setMainLayout(&layout_, clientRect);
     layout_.update(clientRect);
+    for (const auto& widget : widgets_) {
+        if (!widget->isFloating() && !IsRenderableDockWidget(widget.get()) &&
+            df::WindowManager::instance().focusedWidget() == widget->content()) {
+            df::WindowManager::instance().clearFocus();
+        }
+    }
     splitter_.updateSplitters(layout_.root(), clientRect);
     tabVisuals_.clear();
     CollectTabVisuals(layout_.root(), tabVisuals_);
@@ -1119,7 +1227,7 @@ void DX12Demo::createNativeFloatingHost(df::WindowFrame* frame)
         WS_EX_TOOLWINDOW,
         kNativeFloatingHostClass,
         std::wstring(widget->title().begin(), widget->title().end()).c_str(),
-        WS_POPUP | WS_THICKFRAME | ((!automationMode_ || showWindowInAutomation_) ? WS_VISIBLE : 0),
+        WS_POPUP | WS_THICKFRAME,
         static_cast<int>(gb.x),
         static_cast<int>(gb.y),
         std::max(160, static_cast<int>(gb.width)),
@@ -1137,6 +1245,9 @@ void DX12Demo::createNativeFloatingHost(df::WindowFrame* frame)
     entry.frame = frame;
     entry.syncing = false;
     nativeFloatingHosts_[widget] = entry;
+    // Showing a newly undocked host must not activate it: activation sends
+    // WM_KILLFOCUS to the source and drops capture halfway through this gesture.
+    if (!automationMode_ || showWindowInAutomation_) ShowWindow(host, SW_SHOWNOACTIVATE);
 }
 
 void DX12Demo::destroyNativeFloatingHost(df::DockWidget* widget)
@@ -1564,6 +1675,11 @@ void DX12Demo::syncNativeFloatingHosts()
 
 void DX12Demo::clearActiveAction()
 {
+    contentCapture_ = nullptr;
+    for (auto& widget : widgets_) {
+        if (auto* control = dynamic_cast<df::ui::Control*>(widget->content())) control->cancelInteraction();
+        if (auto* gallery = dynamic_cast<DemoGallery*>(widget->content())) gallery->tabs().cancelInteraction();
+    }
     df::DockManager::instance().endDrag();
     df::DockManager::instance().cancelFloatingDrag();
     splitter_.endDrag();
@@ -1572,6 +1688,14 @@ void DX12Demo::clearActiveAction()
     activeWindow_ = nullptr;
     tabGesture_ = TabGestureState{};
     statusDirty_ = true;
+}
+
+void DX12Demo::cancelPointerInteraction()
+{
+    clearActiveAction();
+    captureActive_ = false;
+    leftMouseDown_ = false;
+    if (GetCapture() == hwnd_) ReleaseCapture();
 }
 
 void DX12Demo::updateHoverState(const DFPoint& point)
@@ -1662,9 +1786,11 @@ bool DX12Demo::closeTabNode(df::DockLayout::Node* node, int tabIndex)
 
 bool DX12Demo::handleShortcutKey(int key, bool ctrlDown, bool shiftDown)
 {
+    if (ctrlDown && shiftDown && key == 'R') { reloadUiConfig(); return true; }
     if (ctrlDown && key == 'R') { resetWorkspace(); return true; }
     if (ctrlDown && key == 'T') { cycleTheme(); return true; }
     if (ctrlDown && key == 'P') { toggleProfiler(); return true; }
+    if (ctrlDown && key == 'G') { toggleGallery(); return true; }
     if (key == VK_F1) {
         showDebugOverlay_ = !showDebugOverlay_;
         statusDirty_ = true;
@@ -1725,22 +1851,22 @@ bool DX12Demo::handleShortcutKey(int key, bool ctrlDown, bool shiftDown)
     return false;
 }
 
-LRESULT DX12Demo::handleKeyMessage(WPARAM wParam, LPARAM lParam)
+LRESULT DX12Demo::handleKeyMessage(WPARAM wParam, LPARAM lParam, bool released)
 {
     (void)lParam;
-    Event event(Event::Type::KeyDown);
+    Event event(released ? Event::Type::KeyUp : Event::Type::KeyDown);
     event.key = static_cast<int>(wParam);
     event.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     event.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     event.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
 
-    event.handled = handleShortcutKey(event.key, event.ctrl, event.shift);
+    event.handled = !released && handleShortcutKey(event.key, event.ctrl, event.shift);
     if (!event.handled) {
         processEvent(event);
     }
     statusDirty_ = true;
     updateStatusCaption();
-    return event.handled ? 0 : DefWindowProc(hwnd_, WM_KEYDOWN, wParam, lParam);
+    return event.handled ? 0 : DefWindowProc(hwnd_, released ? WM_KEYUP : WM_KEYDOWN, wParam, lParam);
 }
 
 LRESULT DX12Demo::handleCharMessage(WPARAM wParam, LPARAM lParam)
@@ -2088,6 +2214,9 @@ bool DX12Demo::beginTabGesture(Event& event)
     tabGesture_.tabIndex = hit.tabIndex;
     tabGesture_.strip = df::DockLayout::TabStripRect(*hit.node, hit.node->bounds);
     tabGesture_.start = p;
+    const DFRect pressedTab = df::DockLayout::TabRectForIndex(*hit.node, hit.node->bounds,
+        static_cast<size_t>(hit.tabIndex), hit.node->children.size());
+    tabGesture_.grabOffset = {p.x - pressedTab.x, p.y - pressedTab.y};
     activeAction_ = ActionOwner::TabGesture;
     event.handled = true;
     lastDispatchHandler_ = "tab:hold";
@@ -2110,8 +2239,8 @@ bool DX12Demo::undockActiveTab(const DFPoint& mousePos)
     const float width = std::max(260.0f, sourceBounds.width);
     const float height = std::max(180.0f, sourceBounds.height + df::DX12DockWidget::TITLE_BAR_HEIGHT);
     DFRect floatBounds{
-        mousePos.x - width * 0.35f,
-        mousePos.y - 14.0f,
+        mousePos.x - std::clamp(tabGesture_.grabOffset.x, 0.0f, width - 32.0f),
+        mousePos.y - std::clamp(tabGesture_.grabOffset.y, 0.0f, df::DX12DockWidget::TITLE_BAR_HEIGHT - 1.0f),
         width,
         height
     };
@@ -2338,7 +2467,7 @@ bool DX12Demo::handleActiveAction(Event& event)
     }
 }
 
-void DX12Demo::renderFrame()
+void DX12Demo::renderFrame(bool syncToDisplay)
 {
     // Synchronizing native windows can dispatch messages synchronously. Never
     // reset an allocator/command list while another frame is recording it.
@@ -2435,7 +2564,7 @@ void DX12Demo::renderFrame()
     ThrowIfFailed(commandList_->Close());
     ID3D12CommandList* lists[] = { commandList_.Get() };
     commandQueue_->ExecuteCommandLists(1, lists);
-    swapChain_->Present(1, 0);
+    ThrowIfFailed(swapChain_->Present(syncToDisplay ? 1 : 0, 0));
 
     waitForGPU();
     frameIndex_ = swapChain_->GetCurrentBackBufferIndex();
@@ -2641,12 +2770,38 @@ LRESULT CALLBACK DX12Demo::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_LBUTTONDBLCLK:
     case WM_LBUTTONUP:
     case WM_MOUSEMOVE:
+    case WM_MOUSEWHEEL:
         return demo->handleMouseMessage(msg, wParam, lParam);
+    case WM_CAPTURECHANGED:
+        demo->clearActiveAction();
+        demo->captureActive_ = false;
+        demo->leftMouseDown_ = false;
+        return 0;
+    case WM_CANCELMODE:
+        demo->cancelPointerInteraction();
+        return DefWindowProc(hWnd, msg, wParam, lParam);
+    case WM_KILLFOCUS:
+        demo->cancelPointerInteraction();
+        df::WindowManager::instance().clearFocus();
+        return 0;
+    case WM_TIMER:
+        if (wParam == kNativeDragRenderTimer) {
+            if (demo->nativeDragRenderPending_) {
+                demo->nativeDragRenderPending_ = false;
+                try { demo->renderFrame(false); }
+                catch (const std::exception& e) { AppendRuntimeError("native_drag_preview", e.what()); }
+            }
+            return 0;
+        }
+        return DefWindowProc(hWnd, msg, wParam, lParam);
     case WM_CHAR:
         return demo->handleCharMessage(wParam, lParam);
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         return demo->handleKeyMessage(wParam, lParam);
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        return demo->handleKeyMessage(wParam, lParam, true);
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -2691,6 +2846,42 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
             return {0.0f, 0.0f};
         }
         return {static_cast<float>(cursor.x), static_cast<float>(cursor.y)};
+    };
+
+    auto sendContentPointer = [&]() -> bool {
+        if (!demo || !widget || !widget->content()) return false;
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (msg == WM_MOUSEWHEEL) ScreenToClient(hWnd, &point);
+        RECT rc{};
+        GetClientRect(hWnd, &rc);
+        const DFRect client{4, static_cast<float>(kNativeHostTitleBarHeight + 4),
+            static_cast<float>(std::max(0L, rc.right - 8)),
+            static_cast<float>(std::max(0L, rc.bottom - kNativeHostTitleBarHeight - 8))};
+        const bool captured = GetCapture() == hWnd;
+        if (!captured && !client.contains({static_cast<float>(point.x), static_cast<float>(point.y)})) return false;
+        const bool down = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK;
+        Event event(down ? Event::Type::MouseDown :
+            msg == WM_LBUTTONUP ? Event::Type::MouseUp :
+            msg == WM_MOUSEWHEEL ? Event::Type::MouseWheel : Event::Type::MouseMove);
+        event.x = point.x - client.x;
+        event.y = point.y - client.y;
+        if (msg == WM_MOUSEWHEEL) event.wheelDelta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+        if (down) {
+            SetFocus(hWnd);
+            SetCapture(hWnd);
+            if (auto* host = findHost()) host->contentCaptured = true;
+            df::WindowManager::instance().setFocus(widget->content());
+        }
+        const DFRect previous = widget->content()->bounds();
+        widget->content()->setBounds(client);
+        widget->content()->handleEvent(event);
+        widget->content()->setBounds(previous);
+        if (msg == WM_LBUTTONUP && captured) {
+            if (auto* host = findHost()) host->contentCaptured = false;
+            ReleaseCapture();
+        }
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return event.handled;
     };
 
     switch (msg) {
@@ -2745,6 +2936,7 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
         break;
     case WM_MOUSEMOVE:
         {
+            sendContentPointer();
             TRACKMOUSEEVENT tme{};
             tme.cbSize = sizeof(TRACKMOUSEEVENT);
             tme.dwFlags = TME_LEAVE;
@@ -2756,7 +2948,41 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
     case WM_MOUSELEAVE:
         InvalidateRect(hWnd, nullptr, FALSE);
         return DefWindowProcW(hWnd, msg, wParam, lParam);
+    case WM_MOUSEWHEEL:
+    case WM_LBUTTONUP:
+        if (sendContentPointer()) return 0;
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    case WM_CAPTURECHANGED:
+        if (auto* host = findHost()) {
+            if (host->contentCaptured) {
+                host->contentCaptured = false;
+                if (auto* gallery = dynamic_cast<DemoGallery*>(widget->content())) gallery->tabs().cancelInteraction();
+            }
+        }
+        break;
+    case WM_KILLFOCUS:
+        if (auto* host = findHost(); host && host->inSizeMove)
+            SendMessageW(hWnd, WM_CANCELMODE, 0, 0);
+        if (auto* host = findHost()) host->contentCaptured = false;
+        if (widget && df::WindowManager::instance().focusedWidget() == widget->content())
+            df::WindowManager::instance().clearFocus();
+        if (GetCapture() == hWnd) ReleaseCapture();
+        break;
+    case WM_CANCELMODE:
+        if (demo) {
+            KillTimer(demo->hwnd_, kNativeDragRenderTimer);
+            demo->nativeDragRenderPending_ = false;
+            if (auto* host = findHost()) {
+                host->dockDragActive = false;
+                host->inSizeMove = false;
+                host->contentCaptured = false;
+            }
+            demo->cancelPointerInteraction();
+            InvalidateRect(demo->hwnd_, nullptr, FALSE);
+        }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
     case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
         if (demo && widget) {
             const auto& theme = df::CurrentTheme();
             const bool drawTitleIcons = theme.drawTitleBarIcons && widget->visualOptions().drawTitleBarIcons;
@@ -2774,23 +3000,16 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
                     return 0;
                 }
             }
-            if (widget->content() && GET_Y_LPARAM(lParam) >= kNativeHostTitleBarHeight + 4) {
-                Event event(Event::Type::MouseDown);
-                event.x = static_cast<float>(GET_X_LPARAM(lParam) - 4);
-                event.y = static_cast<float>(GET_Y_LPARAM(lParam) - kNativeHostTitleBarHeight - 4);
-                const DFRect previous = widget->content()->bounds();
-                widget->content()->setBounds({4, static_cast<float>(kNativeHostTitleBarHeight + 4),
-                    static_cast<float>(std::max(0L, rc.right - 8)), static_cast<float>(std::max(0L, rc.bottom - kNativeHostTitleBarHeight - 8))});
-                widget->content()->handleEvent(event);
-                widget->content()->setBounds(previous);
-                InvalidateRect(hWnd, nullptr, FALSE);
-                return 0;
-            }
+            if (sendContentPointer()) return 0;
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         if (demo) return demo->handleKeyMessage(wParam, lParam);
+        break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        if (demo) return demo->handleKeyMessage(wParam, lParam, true);
         break;
     case WM_ENTERSIZEMOVE:
         if (demo && widget) {
@@ -2826,6 +3045,7 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
                 demo->activeWindow_ = frame;
                 demo->activeAction_ = ActionOwner::FloatingWindow;
                 demo->statusDirty_ = true;
+                SetTimer(demo->hwnd_, kNativeDragRenderTimer, 16, nullptr);
                 InvalidateRect(demo->hwnd_, nullptr, FALSE);
             }
         }
@@ -2861,22 +3081,15 @@ LRESULT CALLBACK DX12Demo::FloatingHostWndProc(HWND hWnd, UINT msg, WPARAM wPara
             mgr.updateFloatingDrag(localMouse);
             demo->statusDirty_ = true;
             InvalidateRect(demo->hwnd_, nullptr, FALSE);
-            // Force immediate redraw during native window move loop so edge hints
-            // remain visible while dragging external floating hosts.
-            if (!demo->liveNativeMoveRenderInProgress_) {
-                demo->liveNativeMoveRenderInProgress_ = true;
-                try {
-                    demo->renderFrame();
-                } catch (const std::exception& e) {
-                    // Keep host window responsive even if a frame fails.
-                    AppendRuntimeError("WM_MOVING", e.what());
-                }
-                demo->liveNativeMoveRenderInProgress_ = false;
-            }
+            // Let the OS finish moving the HWND immediately. The timer coalesces
+            // hint redraws without waiting for v-sync inside each move callback.
+            demo->nativeDragRenderPending_ = true;
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     case WM_EXITSIZEMOVE:
         if (demo && widget) {
+            KillTimer(demo->hwnd_, kNativeDragRenderTimer);
+            demo->nativeDragRenderPending_ = false;
             auto* host = findHost();
             demo->onNativeFloatingHostMovedOrSized(widget, hWnd);
             if (host) host->inSizeMove = false;
@@ -2941,31 +3154,40 @@ int main(int /*argc*/, char** /*argv*/)
 
 LRESULT DX12Demo::handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    (void)wParam;
+    // Recover a missed release using the button state carried by this event.
+    // Do this before dispatch, so a released pointer never moves the panel again.
+    if (msg == WM_MOUSEMOVE && !(wParam & MK_LBUTTON) &&
+        (leftMouseDown_ || captureActive_ || contentCapture_ || activeAction_ != ActionOwner::None)) {
+        cancelPointerInteraction();
+    }
     Event e;
-    e.x = static_cast<float>(GET_X_LPARAM(lParam));
-    e.y = static_cast<float>(GET_Y_LPARAM(lParam));
+    POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    if (msg == WM_MOUSEWHEEL) ScreenToClient(hwnd_, &point);
+    e.x = static_cast<float>(point.x);
+    e.y = static_cast<float>(point.y);
     lastMousePos_ = {e.x, e.y};
 
     switch (msg) {
+    case WM_MOUSEWHEEL:
+        e.type = Event::Type::MouseWheel;
+        e.wheelDelta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+        break;
     case WM_LBUTTONDOWN:
         e.type = Event::Type::MouseDown;
+        SetFocus(hwnd_);
         SetCapture(hwnd_);
         captureActive_ = true;
         leftMouseDown_ = true;
         break;
     case WM_LBUTTONDBLCLK:
         e.type = Event::Type::MouseDoubleClick;
+        SetFocus(hwnd_);
         SetCapture(hwnd_);
         captureActive_ = true;
         leftMouseDown_ = true;
         break;
     case WM_LBUTTONUP:
         e.type = Event::Type::MouseUp;
-        if (captureActive_) {
-            ReleaseCapture();
-            captureActive_ = false;
-        }
         leftMouseDown_ = false;
         break;
     case WM_MOUSEMOVE:
@@ -2976,6 +3198,13 @@ LRESULT DX12Demo::handleMouseMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
     statusDirty_ = true;
     processEvent(e);
+    // Update native window geometry on input, before any v-sync/GPU wait.
+    if (nativeFloatHostsEnabled_ && (activeAction_ == ActionOwner::FloatingWindow || msg == WM_LBUTTONUP))
+        syncNativeFloatingHosts();
+    if (msg == WM_LBUTTONUP && captureActive_) {
+        captureActive_ = false;
+        ReleaseCapture();
+    }
     return e.handled ? 0 : DefWindowProc(hwnd_, msg, wParam, lParam);
 }
 
@@ -2985,6 +3214,7 @@ void DX12Demo::processEvent(Event& event)
         event.type == Event::Type::MouseDown ||
         event.type == Event::Type::MouseUp ||
         event.type == Event::Type::MouseMove ||
+        event.type == Event::Type::MouseWheel ||
         event.type == Event::Type::MouseDoubleClick ||
         event.type == Event::Type::MouseDrag;
 
@@ -2996,8 +3226,8 @@ void DX12Demo::processEvent(Event& event)
     }
 
     if (pointerEvent) {
-        event.x = SafeClamp(event.x, 0.0f, viewport_.Width);
-        event.y = SafeClamp(event.y, 0.0f, viewport_.Height);
+        // Captured pointer coordinates may be negative or beyond this client.
+        // Preserve them for window drags, resize handles and captured controls.
         lastMousePos_ = {event.x, event.y};
         updateHoverState(lastMousePos_);
         if (event.type == Event::Type::MouseDown || event.type == Event::Type::MouseDoubleClick) {
@@ -3047,7 +3277,10 @@ void DX12Demo::dispatchMouseEvent(Event& event)
         event.type == Event::Type::MouseDoubleClick;
     const bool isRelease = event.type == Event::Type::MouseUp;
 
-    if (event.x < 0.0f || event.y < 0.0f || event.x > viewport_.Width || event.y > viewport_.Height) {
+    const auto& dragManager = df::DockManager::instance();
+    const bool ownedPointer = !isPress && (contentCapture_ || activeAction_ != ActionOwner::None ||
+        dragManager.isFloatingDragging() || dragManager.isDragging());
+    if (!ownedPointer && (event.x < 0.0f || event.y < 0.0f || event.x > viewport_.Width || event.y > viewport_.Height)) {
         event.handled = true;
         lastDispatchHandler_ = "bounds_reject";
         eventConsole_.logHandled(event, lastDispatchHandler_);
@@ -3057,7 +3290,17 @@ void DX12Demo::dispatchMouseEvent(Event& event)
 
     auto& mgr = df::DockManager::instance();
 
+    if (contentCapture_ && !isPress && event.type != Event::Type::MouseWheel) {
+        auto* target = contentCapture_;
+        if (isRelease) contentCapture_ = nullptr;
+        target->handleEvent(event);
+        event.handled = true;
+        lastDispatchHandler_ = std::string("widget:") + target->title();
+        eventConsole_.logHandled(event, lastDispatchHandler_);
+        return;
+    }
     if (isPress) {
+        contentCapture_ = nullptr;
         refreshLayoutState();
         updateHoverState({event.x, event.y});
     }
@@ -3125,9 +3368,11 @@ void DX12Demo::dispatchMouseEvent(Event& event)
             const bool startedFloatingDrag = mgr.isFloatingDragging();
             lastDispatchHandler_ = startedFloatingDrag ? "floating_drag_start" : "floating_window";
             eventConsole_.logHandled(event, lastDispatchHandler_);
-            if (isPress) {
+            if (isPress && (startedFloatingDrag || win->isDragging())) {
                 activeWindow_ = win;
                 activeAction_ = ActionOwner::FloatingWindow;
+            } else if (isPress) {
+                contentCapture_ = win->content();
             } else if (isRelease) {
                 clearActiveAction();
             }
@@ -3171,6 +3416,8 @@ void DX12Demo::dispatchMouseEvent(Event& event)
                         activeWindow_ = df::WindowManager::instance().findWindowAtPoint(p);
                     } else if (mgr.isDragging()) {
                         activeAction_ = ActionOwner::DockWidgetDrag;
+                    } else {
+                        contentCapture_ = w.get();
                     }
                 }
                 refreshLayoutState();
@@ -3334,6 +3581,119 @@ bool DX12Demo::runNativeRepaintChecks()
     expect(afterHandles <= handles + 1,
         "repeated paints release GDI resources; before=" + std::to_string(handles) + " after=" + std::to_string(afterHandles));
     expect(hostProbe.paints >= 100, "floating content continues to paint");
+    return failures == 0;
+}
+
+bool DX12Demo::runTabDragChecks()
+{
+    int failures = 0;
+    auto expect = [&](bool ok, const std::string& label) {
+        eventConsole_.logAutomation("tab_drag " + label + (ok ? " [PASS]" : " [FAIL]"));
+        if (!ok) ++failures;
+    };
+    auto pointer = [&](UINT message, WPARAM buttons, DFPoint point) {
+        SendMessageW(hwnd_, message, buttons,
+            MAKELPARAM(static_cast<int>(point.x), static_cast<int>(point.y)));
+    };
+    auto& manager = df::DockManager::instance();
+    auto* widget = widgets_[2].get();
+    auto begin = [&]() -> df::WindowFrame* {
+        clearActiveAction();
+        if (GetCapture() == hwnd_) ReleaseCapture();
+        resetWorkspace();
+        SetFocus(hwnd_);
+        auto* tabs = FindParentTabOfWidget(layout_.root(), widget);
+        if (!tabs) { expect(false, "source tab exists"); return nullptr; }
+        size_t index = 0;
+        while (index < tabs->children.size() && tabs->children[index]->widget != widget) ++index;
+        const DFRect tab = df::DockLayout::TabRectForIndex(*tabs, tabs->bounds, index, tabs->children.size());
+        pointer(WM_LBUTTONDOWN, MK_LBUTTON, {std::round(tab.x) + 24, std::round(tab.y) + 14});
+        pointer(WM_MOUSEMOVE, MK_LBUTTON, {500, 300});
+        auto* frame = df::WindowManager::instance().findWindowByContent(widget);
+        expect(frame && manager.isFloatingDragging(), "tab undocks into a live drag");
+        if (frame) {
+            const DFRect b = frame->bounds();
+            expect(std::abs(b.x - 476) <= 1 && std::abs(b.y - 286) <= 1, "keeps original 24px/14px grab point");
+            expect(GetCapture() == hwnd_ && captureActive_ && leftMouseDown_, "undock preserves main-window capture");
+        }
+        return frame;
+    };
+    auto idle = [&]() {
+        return activeAction_ == ActionOwner::None && !manager.isFloatingDragging() &&
+            !manager.isDragging() && !leftMouseDown_ && !captureActive_ && GetCapture() != hwnd_;
+    };
+    if (auto* frame = begin()) {
+        pointer(WM_MOUSEMOVE, MK_LBUTTON, {-24, 360});
+        expect(std::abs(frame->bounds().x + 48) <= 1, "negative client coordinates stay anchored");
+        const DFPoint outside{viewport_.Width + 70, viewport_.Height + 40};
+        pointer(WM_MOUSEMOVE, MK_LBUTTON, outside);
+        expect(std::abs(frame->bounds().x - (outside.x - 24)) <= 1 &&
+            std::abs(frame->bounds().y - (outside.y - 14)) <= 1, "outside drag is not clamped to viewport or desktop edges");
+        if (nativeFloatHostsEnabled_) {
+            RECT actual{};
+            GetWindowRect(nativeFloatingHosts_.at(widget).hwnd, &actual);
+            const auto expected = frame->globalBounds();
+            expect(std::abs(actual.left - expected.x) <= 1 && std::abs(actual.top - expected.y) <= 1,
+                "native window moves before the next render");
+        }
+        pointer(WM_LBUTTONUP, 0, outside);
+        expect(widget->isFloating() && idle(), "outside release ends drag without accidental docking");
+        if (widget->isFloating()) {
+            const auto dropped = widget->parentWindow()->bounds();
+            pointer(WM_MOUSEMOVE, 0, {500, 300});
+            const auto after = widget->parentWindow()->bounds();
+            expect(after.x == dropped.x && after.y == dropped.y, "hover after release cannot move the window");
+        }
+    }
+    if (auto* frame = begin()) {
+        const auto before = frame->bounds();
+        pointer(WM_MOUSEMOVE, 0, {560, 340}); // Lost button-up: next move says button is released.
+        expect(idle() && frame->bounds().x == before.x && frame->bounds().y == before.y,
+            "missing button-up cancels without another move");
+    }
+    for (UINT cancel : {WM_CANCELMODE, WM_KILLFOCUS}) {
+        if (begin()) {
+            SendMessageW(hwnd_, cancel, 0, 0);
+            expect(idle(), "cancellation/focus loss clears drag and capture");
+        }
+    }
+    if (begin()) {
+        ReleaseCapture();
+        expect(idle(), "capture loss clears drag");
+    }
+    if (begin()) {
+        SendMessageW(hwnd_, WM_KEYDOWN, VK_ESCAPE, 0);
+        expect(idle(), "Escape clears drag and capture");
+    }
+    if (nativeFloatHostsEnabled_) {
+        if (auto* frame = begin()) {
+            const HWND host = nativeFloatingHosts_.at(widget).hwnd;
+            clearActiveAction();
+            if (GetCapture() == hwnd_) ReleaseCapture();
+            SendMessageW(host, WM_ENTERSIZEMOVE, 0, 0);
+            nativeFloatingHosts_.at(widget).dockDragActive = true;
+            manager.startFloatingDrag(frame, {500, 300});
+            const auto count = workspaceState_.frames;
+            RECT moving{};
+            GetWindowRect(host, &moving);
+            const auto started = std::chrono::steady_clock::now();
+            SendMessageW(host, WM_MOVING, 0, reinterpret_cast<LPARAM>(&moving));
+            const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            expect(workspaceState_.frames == count, "native move callback avoids synchronous GPU/present wait; ms=" + std::to_string(elapsed));
+            SendMessageW(hwnd_, WM_TIMER, kNativeDragRenderTimer, 0);
+            expect(workspaceState_.frames == count + 1 && !nativeDragRenderPending_,
+                "timer renders queued docking hints");
+            SendMessageW(hwnd_, WM_TIMER, kNativeDragRenderTimer, 0);
+            expect(workspaceState_.frames == count + 1, "idle timer does not render extra frames");
+            SendMessageW(host, WM_CANCELMODE, 0, 0);
+            expect(!manager.isFloatingDragging() && activeAction_ == ActionOwner::None,
+                "native move cancellation clears docking drag");
+            SendMessageW(host, WM_EXITSIZEMOVE, 0, 0);
+        }
+    }
+    clearActiveAction();
+    if (GetCapture() == hwnd_) ReleaseCapture();
+    resetWorkspace();
     return failures == 0;
 }
 
@@ -3811,12 +4171,15 @@ bool DX12Demo::runAutomatedEventChecks()
             ++failures;
             return;
         }
+        // The preceding tab-undock check can create a larger overlapping host.
+        // Select the frame under test before injecting its title-bar gesture.
+        df::WindowManager::instance().bringToFront(floatingWindow_);
         const DFRect before = floatingWindow_->bounds();
         const float startX = before.x + 25.0f;
         const float startY = before.y + 10.0f;
         const float moveX = startX + 65.0f;
         const float moveY = startY + 35.0f;
-        failures += injectEvent(Event::Type::MouseDown, startX, startY, "floating_", "floating_drag_down") ? 0 : 1;
+        failures += injectEvent(Event::Type::MouseDown, startX, startY, "floating_drag_start", "floating_drag_down") ? 0 : 1;
         failures += injectEvent(Event::Type::MouseMove, moveX, moveY, "floating_", "floating_drag_move") ? 0 : 1;
         failures += injectEvent(Event::Type::MouseUp, moveX, moveY, "floating_", "floating_drag_up") ? 0 : 1;
 
@@ -3841,6 +4204,7 @@ bool DX12Demo::runAutomatedEventChecks()
             return;
         }
 
+        df::WindowManager::instance().bringToFront(floatingWindow_);
         const DFRect before = floatingWindow_->bounds();
         const float startX = before.x + 20.0f;
         const float startY = before.y + 10.0f;
@@ -3848,7 +4212,7 @@ bool DX12Demo::runAutomatedEventChecks()
         const float dropX = std::max(0.5f, viewport_.Width * 0.001f);
         const float dropY = SafeClamp(viewport_.Height * 0.5f, 8.0f, viewport_.Height - 8.0f);
 
-        failures += injectEvent(Event::Type::MouseDown, startX, startY, "floating_", "floating_redock_down") ? 0 : 1;
+        failures += injectEvent(Event::Type::MouseDown, startX, startY, "floating_drag_start", "floating_redock_down") ? 0 : 1;
         failures += injectEvent(Event::Type::MouseMove, dropX, dropY, "floating_", "floating_redock_move") ? 0 : 1;
         failures += injectEvent(Event::Type::MouseUp, dropX, dropY, "floating_", "floating_redock_up") ? 0 : 1;
 
@@ -4429,7 +4793,10 @@ bool DX12Demo::runAutomatedEventChecks()
     };
 
     bool runStandardSuite = true;
-    if (scenario == "native_repaint") {
+    if (scenario == "tab_drag") {
+        runStandardSuite = false;
+        if (!runTabDragChecks()) ++failures;
+    } else if (scenario == "native_repaint") {
         runStandardSuite = false;
         if (!runNativeRepaintChecks()) ++failures;
     } else if (scenario == "ui_workspace") {
@@ -4460,21 +4827,21 @@ bool DX12Demo::runAutomatedEventChecks()
             expect(!FindWidgetNode(layout_.root(), widgets_[3].get()), "close removes tab");
         }
         expect(handleShortcutKey('R', true, false), "reset shortcut handled");
-        expect(FindWidgetNode(layout_.root(), widgets_[3].get()) && widgets_.size() == 7, "reset restores closed panels without duplicate widgets");
+        expect(FindWidgetNode(layout_.root(), widgets_[3].get()) && widgets_.size() == 8, "reset restores closed panels without duplicate widgets");
         renderFrame();
         DFRect hierarchy = widgets_[0]->content()->bounds();
-        click({hierarchy.x + 45, hierarchy.y + 91, 4, 4}, "widget:");
+        click({hierarchy.x + 45, hierarchy.y + 50 + df::CurrentTheme().rowHeight + 8, 4, 4}, "widget:");
         expect(workspaceState_.selected == 1, "hierarchy selection updates shared inspector state");
         DFRect inspector = widgets_[2]->content()->bounds();
         const bool gridBefore = workspaceState_.showGrid;
         click({inspector.x + 24, inspector.y + 138, 4, 4}, "widget:");
         expect(workspaceState_.showGrid != gridBefore, "inspector switch changes viewport grid");
         const std::string initialTheme = themeName_;
-        click({182, 48, 30, 16}, "workspace:");
-        expect(themeName_ != initialTheme && layout_.root()->bounds.y >= kWorkspaceTop, "theme toolbar reflows workspace");
-        cycleTheme(); cycleTheme();
+        click(WorkspaceButton(1, viewport_.Width), "workspace:");
+        expect(themeName_ != initialTheme && layout_.root()->bounds.y >= WorkspaceTop(), "theme toolbar reflows workspace");
+        for (size_t i = 1; i < df::ThemePresetNames().size(); ++i) cycleTheme();
         expect(themeName_ == initialTheme, "theme cycle restores original preset");
-        click({338, 48, 30, 16}, "workspace:");
+        click(WorkspaceButton(2, viewport_.Width), "workspace:");
         expect(!widgets_[4]->isFloating(), "profiler toolbar closes window");
         expect(handleShortcutKey('P', true, false) && widgets_[4]->isFloating(), "profiler shortcut reopens window");
         if (nativeFloatHostsEnabled_) {
@@ -4505,8 +4872,100 @@ bool DX12Demo::runAutomatedEventChecks()
         floatingWindow_ = nullptr;
         refreshLayoutState();
         expect(layout_.root() == nullptr, "empty workspace remains valid");
-        click({22, 48, 30, 16}, "workspace:");
+        click(WorkspaceButton(0, viewport_.Width), "workspace:");
         expect(layout_.root() && widgets_[0]->bounds().width > 0, "toolbar restores empty workspace");
+        // Exercise inherited controls through the actual dock/native event routes.
+        toggleProfiler();
+        click(WorkspaceButton(4, viewport_.Width), "workspace:");
+        renderFrame();
+        auto* gallery = dynamic_cast<DemoGallery*>(widgets_[7]->content());
+        expect(gallery && gallery->controlCount() >= 50, "gallery exposes a broad control collection");
+        if (gallery) {
+            gallery->tabs().setActiveIndex(0);
+            renderFrame();
+            const int before = gallery->clickCount();
+            click(gallery->actionButton().bounds(), "widget:UI Gallery");
+            expect(gallery->clickCount() == before + 1, "gallery button release invokes its action");
+            expect(std::abs(gallery->actionButton().bounds().height - df::CurrentTheme().buttonHeight) < .01f,
+                "gallery inherits configured button height");
+            handleKeyMessage(VK_SPACE, 0);
+            handleKeyMessage(VK_SPACE, 0, true);
+            expect(gallery->clickCount() == before + 2, "focused button handles native key down and up");
+            const auto actionBounds = gallery->actionButton().bounds();
+            const LPARAM actionPoint = MAKELPARAM(static_cast<int>(actionBounds.x + 20), static_cast<int>(actionBounds.y + actionBounds.height * .5f));
+            SendMessageW(hwnd_, WM_LBUTTONDBLCLK, MK_LBUTTON, actionPoint);
+            SendMessageW(hwnd_, WM_LBUTTONUP, 0, actionPoint);
+            expect(gallery->clickCount() == before + 3, "rapid second click activates gallery control");
+            SendMessageW(hwnd_, WM_LBUTTONDOWN, MK_LBUTTON, actionPoint);
+            ReleaseCapture();
+            expect(!gallery->actionButton().pressed() && !contentCapture_, "capture loss cancels pressed content");
+            SendMessageW(hwnd_, WM_LBUTTONUP, 0, actionPoint);
+            expect(gallery->clickCount() == before + 3, "cancelled press cannot activate on later release");
+            click(gallery->tabs().tabBounds(2), "widget:UI Gallery");
+            expect(gallery->tabs().activeIndex() == 2, "content tabs select their page");
+            renderFrame();
+            const auto scrollBounds = gallery->scrollView().bounds();
+            POINT wheelPoint{static_cast<LONG>(scrollBounds.x + 40), static_cast<LONG>(scrollBounds.y + 60)};
+            ClientToScreen(hwnd_, &wheelPoint);
+            SendMessageW(hwnd_, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), MAKELPARAM(wheelPoint.x, wheelPoint.y));
+            expect(gallery->scrollOffset() > 0, "Win32 mouse wheel reaches the scroll view");
+            const auto thumb = gallery->scrollView().scrollbarThumb();
+            injectEvent(Event::Type::MouseDown, thumb.x + thumb.width * .5f, thumb.y + thumb.height * .5f, "widget:UI Gallery", "scroll_thumb_down");
+            injectEvent(Event::Type::MouseMove, thumb.x + thumb.width * .5f, scrollBounds.y + scrollBounds.height + 30, "widget:UI Gallery", "scroll_thumb_move");
+            injectEvent(Event::Type::MouseUp, thumb.x + thumb.width * .5f, scrollBounds.y + scrollBounds.height + 30, "widget:UI Gallery", "scroll_thumb_up");
+            expect(std::abs(gallery->scrollOffset() - gallery->scrollView().maximumOffset()) < .01f,
+                "scrollbar capture reaches and clamps to the end outside content");
+            const float buttonHeight = df::CurrentTheme().buttonHeight;
+            const float tabHeight = df::CurrentTheme().tabBarHeight;
+            cycleTheme();
+            expect(df::CurrentTheme().buttonHeight == buttonHeight && df::CurrentTheme().tabBarHeight == tabHeight,
+                "theme cycling preserves configured geometry");
+            for (size_t i = 1; i < df::ThemePresetNames().size(); ++i) cycleTheme();
+            const std::string configPath = uiConfigPath_;
+            uiConfigPath_ = "__missing_gallery_reload__.ini";
+            expect(!reloadUiConfig() && df::CurrentTheme().buttonHeight == buttonHeight,
+                "failed config reload retains active style");
+            uiConfigPath_ = configPath;
+            expect(reloadUiConfig(), "valid config reload succeeds");
+            if (nativeFloatHostsEnabled_) {
+                df::DockManager::instance().startUndockDrag(widgets_[7].get(), {450, 180});
+                clearActiveAction();
+                refreshLayoutState();
+                const auto host = nativeFloatingHosts_.find(widgets_[7].get());
+                expect(host != nativeFloatingHosts_.end(), "gallery can move to a native host");
+                if (host != nativeFloatingHosts_.end()) {
+                    gallery->scrollView().setOffset(0);
+                    InvalidateRect(host->second.hwnd, nullptr, FALSE);
+                    UpdateWindow(host->second.hwnd);
+                    POINT nativePoint{40, kNativeHostTitleBarHeight + 100};
+                    ClientToScreen(host->second.hwnd, &nativePoint);
+                    SendMessageW(host->second.hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), MAKELPARAM(nativePoint.x, nativePoint.y));
+                    expect(gallery->scrollOffset() > 0, "native host forwards wheel input to gallery");
+                    gallery->tabs().setActiveIndex(0);
+                    RECT rc{};
+                    GetClientRect(host->second.hwnd, &rc);
+                    const DFRect previous = gallery->bounds();
+                    gallery->setBounds({4, static_cast<float>(kNativeHostTitleBarHeight + 4),
+                        static_cast<float>(rc.right - 8), static_cast<float>(rc.bottom - kNativeHostTitleBarHeight - 8)});
+                    const auto button = gallery->actionButton().bounds();
+                    const LPARAM point = MAKELPARAM(static_cast<int>(button.x + 20), static_cast<int>(button.y + button.height * .5f));
+                    gallery->setBounds(previous);
+                    const int actions = gallery->clickCount();
+                    SendMessageW(host->second.hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point);
+                    SendMessageW(host->second.hwnd, WM_LBUTTONUP, 0, point);
+                    expect(gallery->clickCount() == actions + 1, "native host forwards button press and release");
+                }
+            } else {
+                df::DockManager::instance().startUndockDrag(widgets_[7].get(), {450, 180});
+                clearActiveAction();
+                refreshLayoutState();
+                gallery->tabs().setActiveIndex(0);
+                renderFrame();
+                const int actions = gallery->clickCount();
+                click(gallery->actionButton().bounds(), "floating_window");
+                expect(gallery->clickCount() == actions + 1, "in-canvas floating control uses one coordinate translation");
+            }
+        }
         validatePanelSizes("workspace_final");
         renderFrame();
         ComPtr<ID3D12InfoQueue> debugMessages;

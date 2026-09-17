@@ -40,14 +40,24 @@ if (WIN32 AND WB_BUILD_DX12_DEMO)
         dxgi
         d3dcompiler
         dwmapi
+        gdiplus
         dbghelp
     )
     target_compile_features(dx12_demo PRIVATE cxx_std_17)
     target_include_directories(dx12_demo PRIVATE ${CMAKE_CURRENT_LIST_DIR}/widgetsBase)
     target_compile_definitions(dx12_demo PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    add_custom_command(TARGET dx12_demo POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/config" "$<TARGET_FILE_DIR:dx12_demo>/config")
 endif()
 
 if (BUILD_TESTING)
+    foreach(ui_check ui_config ui_controls)
+        add_executable(${ui_check}_tests widgetsBase/${ui_check}_tests.cpp)
+        target_link_libraries(${ui_check}_tests PRIVATE dock_framework dock_components)
+        add_test(NAME ${ui_check}_tests COMMAND $<TARGET_FILE:${ui_check}_tests> "${CMAKE_CURRENT_SOURCE_DIR}/config")
+        set_tests_properties(${ui_check}_tests PROPERTIES LABELS "ui;milestone" TIMEOUT 15)
+    endforeach()
     if (TARGET dock_framework_demo)
         add_test(NAME dock_framework_demo_smoke COMMAND $<TARGET_FILE:dock_framework_demo>)
         set_tests_properties(dock_framework_demo_smoke PROPERTIES PASS_REGULAR_EXPRESSION "Demo Complete")
@@ -59,6 +69,12 @@ if (BUILD_TESTING)
     endif()
 
     if (TARGET dx12_demo)
+        foreach(drag_host 0 1)
+            add_test(NAME dx12_tab_drag_${drag_host}
+                COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=tab_drag
+                    DF_NATIVE_FLOAT_HOSTS=${drag_host} DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+            set_tests_properties(dx12_tab_drag_${drag_host} PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
+        endforeach()
         add_test(NAME dx12_native_repaint
             COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=native_repaint
                 DF_NATIVE_FLOAT_HOSTS=1 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
@@ -67,11 +83,18 @@ if (BUILD_TESTING)
             COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=mixed
                 DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
         set_tests_properties(dx12_event_mixed PROPERTIES TIMEOUT 30)
-        foreach(ui_theme dark light slate)
+        foreach(ui_theme dark light slate ocean forest rose)
             add_test(NAME dx12_workspace_${ui_theme}
                 COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace
                     DF_THEME=${ui_theme} DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
             set_tests_properties(dx12_workspace_${ui_theme} PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
+        endforeach()
+        foreach(ui_profile compact rounded)
+            add_test(NAME dx12_config_${ui_profile}
+                COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace
+                    DF_UI_CONFIG=${CMAKE_CURRENT_SOURCE_DIR}/config/${ui_profile}.ini
+                    DF_EVENT_CONSOLE=0 DF_EVENT_VERBOSE=0 $<TARGET_FILE:dx12_demo>)
+            set_tests_properties(dx12_config_${ui_profile} PROPERTIES TIMEOUT 30 LABELS "ui;milestone")
         endforeach()
         add_test(NAME dx12_workspace_native
             COMMAND ${CMAKE_COMMAND} -E env DF_AUTOMATE_EVENTS=1 DF_AUTOMATION_SCENARIO=ui_workspace

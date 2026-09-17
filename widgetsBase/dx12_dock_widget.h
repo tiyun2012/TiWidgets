@@ -174,6 +174,10 @@ public:
         const DFRect contentHost{b.x, b.y + topOffset, b.width, std::max(0.0f, b.height - topOffset)};
         const DFRect client = clientAreaRect(contentHost);
 
+        content()->setBounds(client);
+        if (event.type == Event::Type::MouseDown && client.contains(p)) {
+            WindowManager::instance().setFocus(content());
+        }
         // Forward to content with local coordinates relative to floating client area.
         Event local = event;
         local.x -= client.x;
